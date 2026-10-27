@@ -1,0 +1,122 @@
+
+{% extends "base.html" %}
+{% block title %}Admin Dashboard | SMS{% endblock %}
+{% block content %}
+<h1>Administrator Dashboard</h1>
+<p>Manage student accounts, courses and enrolments.</p>
+
+<div class="grid">
+    <section><h2>{{ counts.students }}</h2><p>Students</p></section>
+    <section><h2>{{ counts.courses }}</h2><p>Courses</p></section>
+    <section><h2>{{ counts.enrolments }}</h2><p>Enrolments</p></section>
+</div>
+
+<section>
+    <h2>Create student account</h2>
+    <p class="muted">A temporary password will be generated automatically.</p>
+    <form method="post" action="{{ url_for('create_student') }}">
+        <div class="grid">
+            <label>Student number<br><input name="student_number" required></label>
+            <label>First name<br><input name="first_name" required></label>
+            <label>Last name<br><input name="last_name" required></label>
+            <label>Email<br><input name="email" type="email" required></label>
+        </div>
+        <button type="submit">Create student account</button>
+    </form>
+</section>
+
+<section>
+    <h2>Student accounts</h2>
+    <table>
+        <thead><tr><th>Student ID</th><th>Name</th><th>Email</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody>
+        {% for student in students %}
+            <tr>
+                <td>{{ student.student_number }}</td>
+                <td>{{ student.first_name }} {{ student.last_name }}</td>
+                <td>{{ student.email }}</td>
+                <td>{{ "Active" if student.active else "Inactive" }}</td>
+                <td>
+                    <form method="post" action="{{ url_for('toggle_student', student_id=student.id) }}">
+                        <button>{{ "Deactivate" if student.active else "Activate" }}</button>
+                    </form>
+                    <form method="post" action="{{ url_for('reset_student_password', student_id=student.id) }}">
+                        <button>Reset password</button>
+                    </form>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="5">No students created yet.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section>
+    <h2>Create course</h2>
+    <form method="post" action="{{ url_for('create_course') }}">
+        <label>Course code <input name="course_code" required></label>
+        <label>Course name <input name="course_name" required></label><br>
+        <label>Description <input name="description"></label>
+        <button type="submit">Add course</button>
+    </form>
+</section>
+
+<section>
+    <h2>Courses</h2>
+    <table>
+        <thead><tr><th>Code</th><th>Course</th><th>Description</th><th>Action</th></tr></thead>
+        <tbody>
+        {% for course in courses %}
+            <tr>
+                <td>{{ course.course_code }}</td><td>{{ course.course_name }}</td><td>{{ course.description }}</td>
+                <td><form method="post" action="{{ url_for('delete_course', course_id=course.id) }}"><button>Delete</button></form></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="4">No courses created yet.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section>
+    <h2>Enrol student in course</h2>
+    <form method="post" action="{{ url_for('create_enrolment') }}">
+        <label>Student
+            <select name="student_id" required>
+                <option value="">Select student</option>
+                {% for student in students if student.active %}
+                    <option value="{{ student.id }}">{{ student.student_number }} — {{ student.first_name }} {{ student.last_name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Course
+            <select name="course_id" required>
+                <option value="">Select course</option>
+                {% for course in courses %}
+                    <option value="{{ course.id }}">{{ course.course_code }} — {{ course.course_name }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <button type="submit">Enrol student</button>
+    </form>
+</section>
+
+<section>
+    <h2>Current enrolments</h2>
+    <table>
+        <thead><tr><th>Student</th><th>Course</th><th>Action</th></tr></thead>
+        <tbody>
+        {% for enrolment in enrolments %}
+            <tr>
+                <td>{{ enrolment.student_number }} — {{ enrolment.first_name }} {{ enrolment.last_name }}</td>
+                <td>{{ enrolment.course_code }} — {{ enrolment.course_name }}</td>
+                <td><form method="post" action="{{ url_for('delete_enrolment', enrolment_id=enrolment.id) }}"><button>Remove</button></form></td>
+            </tr>
+        {% else %}
+            <tr><td colspan="3">No enrolments yet.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

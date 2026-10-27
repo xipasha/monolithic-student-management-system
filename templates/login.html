@@ -1,0 +1,32 @@
+
+{% extends "base.html" %}
+{% block title %}Login | SMS{% endblock %}
+{% block content %}
+<section style="max-width:420px;margin:40px auto">
+    <h1>Sign in</h1>
+
+<form method="post">
+    <label for="login_id">Admin username or Student ID</label><br>
+    <input
+        id="login_id"
+        name="login_id"
+        required
+        autocomplete="username"
+        style="width:100%"
+    ><br>
+
+    <label for="password">Password</label><br>
+    <input
+        id="password"
+        name="password"
+        type="password"
+        required
+        autocomplete="current-password"
+        style="width:100%"
+    ><br>
+
+    <button type="submit">Log in</button>
+</form>
+<p class="muted">Student accounts are created by the administrator.</p>
+</section>
+{% endblock %}

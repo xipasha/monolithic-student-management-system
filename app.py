@@ -43,8 +43,9 @@ def init_db():
     db = get_db()
     db.executescript("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            password_hash TEXT NOT NULL,
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE,
+    password_hash TEXT NOT NULL,
             role TEXT NOT NULL CHECK(role IN ('admin', 'student')),
             must_change_password INTEGER NOT NULL DEFAULT 0,
             active INTEGER NOT NULL DEFAULT 1,
@@ -64,7 +65,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS courses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             course_code TEXT UNIQUE NOT NULL,
-            course_name TEXT NOT NULL
+            course_name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS enrolments (
@@ -77,6 +79,42 @@ def init_db():
             FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE
         );
     """)
+
+    course_columns = {
+        row["name"]
+        for row in db.execute("PRAGMA table_info(courses)").fetchall()
+    }
+    if "description" not in course_columns:
+        db.execute(
+            "ALTER TABLE courses ADD COLUMN description TEXT NOT NULL DEFAULT ''"
+        )
+
+    columns = {
+        row["name"]
+        for row in db.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "username" not in columns:
+        db.execute("ALTER TABLE users ADD COLUMN username TEXT")
+    admin_username = os.environ.get("ADMIN_USERNAME", "admin")
+    db.execute(
+        """
+        UPDATE users
+        SET username = ?
+        WHERE role = 'admin' AND username IS NULL
+        """,
+        (admin_username,),
+    )
+    db.execute(
+        """
+        UPDATE users
+        SET username = 'student_' || (
+            SELECT student_number
+            FROM students
+            WHERE students.user_id = users.id
+        )
+        WHERE role = 'student' AND username IS NULL
+        """
+    )
     db.commit()
 
     admin_username = os.environ.get("ADMIN_USERNAME", "admin")

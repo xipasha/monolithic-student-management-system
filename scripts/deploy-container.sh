@@ -29,6 +29,10 @@ fi
 unset secret_key
 
 configure_app_service() {
+    local health_config
+    health_config="$(mktemp)"
+    printf '{"healthCheckPath":"/health"}\n' > "$health_config"
+
     az webapp config appsettings set \
         --name "$WEBAPP_NAME" \
         --resource-group "$RESOURCE_GROUP" \
@@ -38,8 +42,10 @@ configure_app_service() {
     az webapp config set \
         --name "$WEBAPP_NAME" \
         --resource-group "$RESOURCE_GROUP" \
-        --generic-configurations '{"healthCheckPath":"/health"}' \
+        --generic-configurations "@$health_config" \
         --output none
+
+    rm -f -- "$health_config"
 }
 
 case "$1" in

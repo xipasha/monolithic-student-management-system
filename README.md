@@ -80,3 +80,40 @@ Reader access exposes resource metadata for all resources in that group.
 For a new deployment, update the workflow's resource group, web app, plan, and
 identity client ID to match the parameter values and the identity created by
 the template.
+## PostgreSQL migration and rollback
+
+The app uses SQLite locally when `DATABASE_URL` is unset. In Azure, set it to
+an encoded PostgreSQL connection URL ending in `sslmode=require`; keep both the
+server administrator password and the full URL in GitHub Actions secrets or an
+approved secret manager. Never place either value in a parameter file or Git.
+The Bicep parameters read `POSTGRES_ADMIN_PASSWORD` and `DATABASE_URL` from the
+process environment and mark both parameters secure.
+
+The PostgreSQL server is created in South Africa North with a 32 GB Burstable
+`Standard_B1ms` SKU, seven-day backups, TLS required, and public networking. The
+firewall rule `AllowAzureServices` is needed for App Service connectivity; it
+allows Azure-hosted sources broadly. Restrict this to App Service outbound IPs
+or private networking if the deployment later moves to a supported networked
+configuration.
+
+For a one-time data copy, first take a consistent copy of the source SQLite
+file and stop application writes. Set `DATABASE_URL` in the environment from a
+secure source, then run:
+
+```powershell
+python scripts/migrate-sqlite-to-postgres.py path\to\sms.db
+```
+
+The script creates the current schema if needed, refuses to merge into a
+PostgreSQL database that already contains users, verifies table columns, copies
+all rows and IDs in foreign-key order, and resets the serial sequences. Keep
+the SQLite file unchanged as the rollback copy. Do not point the app at
+PostgreSQL until the migration completes and the copied row counts have been
+reviewed.
+
+To roll back the application, set `DATABASE_URL` to empty/unset so the app
+falls back to its SQLite database, then restart/redeploy the prior container.
+This only restores data present in the SQLite copy. Writes made after cutover
+exist only in PostgreSQL and must be exported or reconciled before rollback.
+The current container configuration does not persist its SQLite directory, so
+retain the migration source file outside the container before switching.

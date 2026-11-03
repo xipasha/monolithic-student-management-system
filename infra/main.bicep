@@ -9,6 +9,26 @@ param appName string
 @description('Linux App Service plan name.')
 param appServicePlanName string
 
+@description('PostgreSQL Flexible Server name.')
+param postgresServerName string
+
+@description('PostgreSQL database name.')
+param postgresDatabaseName string = 'sms'
+
+@description('PostgreSQL administrator login.')
+param postgresAdminLogin string = 'smsadmin'
+
+@secure()
+@description('PostgreSQL administrator password, supplied from a secure environment variable.')
+param postgresAdminPassword string
+
+@secure()
+@description('PostgreSQL connection URL (including sslmode=require), supplied from a secure environment variable.')
+param databaseUrl string
+
+@description('Set false for the existing-app CI what-if check.')
+param managePostgres bool = true
+
 @description('Set to false when the plan already exists and should only be verified.')
 param createAppServicePlan bool = true
 
@@ -76,6 +96,59 @@ resource webConfig 'Microsoft.Web/sites/config@2023-12-01' = {
   }
 }
 
+resource postgresServer 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = if (managePostgres) {
+  name: postgresServerName
+  location: location
+  sku: {
+    name: 'Standard_B1ms'
+    tier: 'Burstable'
+  }
+  properties: {
+    administratorLogin: postgresAdminLogin
+    administratorLoginPassword: postgresAdminPassword
+    version: '16'
+    availabilityZone: '1'
+    backup: {
+      backupRetentionDays: 7
+      geoRedundantBackup: 'Disabled'
+    }
+    storage: {
+      storageSizeGB: 32
+      autoGrow: 'Enabled'
+    }
+    network: {
+      publicNetworkAccess: 'Enabled'
+    }
+  }
+}
+
+resource postgresDatabase 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-01' = if (managePostgres) {
+  parent: postgresServer
+  name: postgresDatabaseName
+  properties: {
+    charset: 'UTF8'
+    collation: 'en_US.utf8'
+  }
+}
+
+resource postgresTls 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = if (managePostgres) {
+  parent: postgresServer
+  name: 'require_secure_transport'
+  properties: {
+    value: 'ON'
+    source: 'user-override'
+  }
+}
+
+resource postgresAzureFirewall 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = if (managePostgres) {
+  parent: postgresServer
+  name: 'AllowAzureServices'
+  properties: {
+    startIpAddress: '0.0.0.0'
+    endIpAddress: '0.0.0.0'
+  }
+}
+
 resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
   parent: webApp
   name: 'appsettings'
@@ -87,6 +160,7 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     WEBSITES_PORT: '8000'
     PORT: '8000'
     SECRET_KEY: secretKey
+    DATABASE_URL: databaseUrl
   }
 }
 

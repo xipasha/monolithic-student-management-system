@@ -59,6 +59,8 @@ expected = {
     "PORT": "8000",
     "SECRET_KEY": os.environ["SECRET_KEY"],
 }
+if os.environ.get("DATABASE_URL"):
+    expected["DATABASE_URL"] = os.environ["DATABASE_URL"]
 actual = {item["name"]: item["value"] for item in json.loads(os.environ["APP_SETTINGS_JSON"])}
 missing = expected.keys() - actual.keys()
 extra = actual.keys() - expected.keys()
@@ -96,6 +98,7 @@ az deployment group what-if \
   --template-file infra/main.bicep \
   --parameters infra/main.bicepparam \
   --parameters createAppServicePlan=false manageDeploymentIdentity=false \
+    managePostgres=false \
     deploymentIdentityPrincipalId="$identity_principal_id" \
     containerImage="$container_image" \
   --result-format FullResourcePayloads \

@@ -105,3 +105,45 @@ application without `SECRET_KEY` fails with the expected runtime error.
 
 Revert commit `64cdf97` or redeploy the `step-0-baseline` tag. Any deployment
 rollback must continue to provide the configured App Service `SECRET_KEY`.
+
+## Step 2: Containerise the Flask monolith
+
+**Date:** 2026-11-03
+
+**Commits:** `dc3e959`, `3833872`, `6fe0ebe`, `1cace51`
+
+**Author:** Project team
+
+### What changed
+
+- Pinned the container base to `python:3.13.7-slim-bookworm`.
+- Runs Gunicorn as a non-root user and binds to the `PORT` environment variable
+  (defaulting to port 8000).
+- Keeps dependencies in a separate Docker build layer and excludes tests,
+  environment files, Git metadata, and local database state from the image
+  context.
+- Added CI that builds the image, starts it with a test `SECRET_KEY`, and
+  checks `/health`.
+- Added a main-branch-only GHCR publish job, gated on tests and the container
+  smoke test. Images are tagged with the full commit SHA; no `latest` tag is
+  published.
+- No application behavior or business logic was changed.
+
+### Risk
+
+The SQLite database remains local to the container's writable filesystem.
+Replacing the container can discard its data, and this image is not suitable
+for persistent production data until SQLite is replaced by a managed database.
+The application also requires `SECRET_KEY` to be supplied at runtime.
+
+### Verification
+
+The CI workflow runs the test and coverage gate before building the image,
+starts the container with a test secret, and requires `/health` to return
+success before the image can be published to GHCR. The publish job only runs
+for pushes to `main`.
+
+### Rollback
+
+Deploy the previous image using its commit-SHA tag. Do not rely on a mutable
+`latest` tag.

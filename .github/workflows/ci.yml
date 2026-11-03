@@ -76,7 +76,9 @@ jobs:
           exit 1
 
   publish-image:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     needs: [tests, container-build-smoke]
     permissions:
@@ -103,14 +105,8 @@ jobs:
 
   deploy-app-service:
     if: |
-      always() &&
       github.ref == 'refs/heads/main' &&
-      needs.tests.result == 'success' &&
-      needs.container-build-smoke.result == 'success' &&
-      (
-        (github.event_name == 'push' && needs.publish-image.result == 'success') ||
-        github.event_name == 'workflow_dispatch'
-      )
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     needs: [tests, container-build-smoke, publish-image]
     concurrency:
@@ -179,16 +175,27 @@ jobs:
         run: |
           health_url="https://sms-student-management-20261103.azurewebsites.net/health"
           for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error --max-time 4 "$health_url"; then
+            status_code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 4 "$health_url" || true)"
+            if [[ "$status_code" == "200" ]]; then
               if [[ "$SIMULATE_FAILURE" == "true" ]]; then
-                echo "Failure simulation unexpectedly returned healthy; forcing restoration." >&2
-                exit 1
+                echo "App Service is still serving a healthy response while the bad-port restart propagates."
+              else
+                curl --fail --silent --show-error "$health_url"
+                exit 0
               fi
-              exit 0
+            elif [[ "$SIMULATE_FAILURE" == "true" ]]; then
+              echo "Observed expected unhealthy HTTP status '$status_code' from the bad-port deployment."
+              exit 1
+            else
+              echo "Health check returned HTTP status '$status_code'."
             fi
             sleep 2
           done
-          echo "Application health check did not return HTTP 200 within 3 minutes." >&2
+          if [[ "$SIMULATE_FAILURE" == "true" ]]; then
+            echo "Failure simulation did not produce an unhealthy response before timeout." >&2
+          else
+            echo "Application health check did not return HTTP 200 within 3 minutes." >&2
+          fi
           exit 1
 
       - name: Restore previous runtime and verify health

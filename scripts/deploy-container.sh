@@ -37,7 +37,7 @@ configure_app_service() {
     az webapp config appsettings set \
         --name "$WEBAPP_NAME" \
         --resource-group "$RESOURCE_GROUP" \
-        --settings "WEBSITES_PORT=$port" \
+        --settings "WEBSITES_PORT=$port" PORT=8000 \
         --output none
 
     az webapp config set \

@@ -337,3 +337,58 @@ resource-group Reader role exposes metadata for all resources in the shared
 No Bicep deployment was made to the App Service. The CI-only access grants can
 be removed by deleting their resource-group role assignments and the custom
 role definition if this what-if check is no longer needed.
+
+## Step 5: Prepare PostgreSQL Flexible Server migration
+
+**Date:** 2026-11-03
+
+**Status:** Implementation prepared; test, data migration, and production cutover remain pending.
+
+### What changed
+
+- Added an Azure Database for PostgreSQL Flexible Server (PostgreSQL 16,
+  Burstable `Standard_B1ms`, 32 GB storage, seven-day backup) and `sms` database
+  to Bicep. The administrator password and application connection URL are
+  secure parameters. TLS is explicitly required. A firewall rule permits
+  Azure-hosted clients so App Service can connect.
+- Added a PostgreSQL adapter selected by `DATABASE_URL`; SQLite remains the
+  fallback. Existing route SQL and characterisation assertions were retained.
+- Added a PostgreSQL service-container test matrix alongside SQLite.
+- Added `scripts/migrate-sqlite-to-postgres.py`, which refuses a nonempty target,
+  checks schema columns, copies IDs and rows in foreign-key order, and resets
+  serial sequences. Added migration and rollback instructions to the README.
+
+### Risk
+
+The main risks are losing the current container-local SQLite data when the
+container is replaced and a schema mismatch during the one-off copy. The
+migration script stops on schema mismatch or a nonempty PostgreSQL target.
+The initial firewall rule allows Azure-hosted sources broadly; it should be
+restricted to App Service outbound addresses or private networking when
+available. Writes after cutover exist only in PostgreSQL and are not copied
+back during rollback.
+
+### Verification
+
+- Azure subscription `Azure for Students` reports the PostgreSQL resource
+  provider as registering. South Africa North lists `Standard_B1ms`; the
+  PostgreSQL quota endpoint reports 0 of 8 Burstable B-family servers and 0 of
+  16 cores in use.
+- `az bicep build` succeeded for `infra/main.bicep` and
+  `infra/what-if-role.bicep`; `az bicep build-params` succeeded with a
+  process-only validation value for the existing required `SECRET_KEY`.
+- `git diff --check` passed.
+- The 14 characterisation tests were not run in this environment: Python,
+  Docker, and Bash are unavailable. CI was not triggered because the local
+  GitHub CLI credentials are invalid.
+- No database was provisioned and no production deployment or login verification
+  was performed. There is no local `instance/sms.db`; the deployed App Service
+  does not have `DATABASE_URL`, and its container-local SQLite data must be
+  copied to a stable file before replacing the running image.
+
+### Rollback
+
+Before cutover, retain the source SQLite file unchanged. To return the app to
+SQLite, unset `DATABASE_URL` and redeploy/restart the prior container. This
+restores only the SQLite copy; PostgreSQL writes made after cutover require a
+separate export or reconciliation before rollback.

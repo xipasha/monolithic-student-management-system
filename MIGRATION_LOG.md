@@ -245,6 +245,44 @@ validation before making changes to Azure.
 
 #### Known gap
 
-This rehearsal verifies manual rollback and roll-forward. Automatic rollback
-after a health-check failure has not yet been deliberately exercised; that
-failure-path rehearsal remains Step 3c.
+This rehearsal verified manual rollback and roll-forward. Automatic rollback
+after a health-check failure was subsequently exercised in Step 3c.
+
+### Step 3c: Automatic rollback failure-path rehearsal
+
+**Date:** 2026-11-03
+
+**Workflow commit:** `0aeae07`
+
+**Author:** Project team
+
+#### What was done
+
+Dispatched the **Test and Build** workflow with `simulate_failure=true`. The
+workflow deployed the current GHCR image with `WEBSITES_PORT=9999`, verified
+that setting, and explicitly restarted the App Service so the invalid port
+was applied before probing health.
+
+#### Risk
+
+A few minutes of downtime occurred while the failed configuration was detected
+and the previous image/runtime was restored. The rollback rehearsal did not
+change `app.py` or application behavior.
+
+#### Verification
+
+- [Automatic rollback rehearsal run 41640158228](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41640158228)
+  passed tests, secret scanning, coverage, container build/smoke test, and
+  image publication. The deploy job went red intentionally after recovery.
+- The bad-port health probe observed HTTP status `000`, confirming the
+  application was unreachable after the forced restart.
+- The restore step confirmed the exact previously recorded image tag:
+  `ghcr.io/xipasha/monolithic-student-management-system:0aeae07bc9073e3cb8984050f711d7f31603fc82`.
+  The restored runtime passed its `/health` check.
+- After the run, the live App Service reported that same image tag,
+  `WEBSITES_PORT=8000`, and `/health` returned HTTP 200.
+
+#### Rollback
+
+No manual recovery was needed. The workflow restored the previously recorded
+GHCR image tag and failed the run after verifying recovery, as designed.

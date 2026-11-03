@@ -9,6 +9,8 @@ from flask import (
     render_template, request, session, url_for
 )
 from werkzeug.security import check_password_hash, generate_password_hash
+import psycopg2
+from psycopg2.extras import DictCursor
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -22,12 +24,60 @@ app.config["SECRET_KEY"] = secret_key
 app.config["DATABASE"] = str(DATABASE)
 
 
+class PostgresCursor:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    @property
+    def lastrowid(self):
+        with self._cursor.connection.cursor() as cursor:
+            cursor.execute("SELECT LASTVAL()")
+            return cursor.fetchone()[0]
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+
+class PostgresConnection:
+    def __init__(self, connection):
+        self._connection = connection
+
+    def execute(self, sql, parameters=()):
+        cursor = self._connection.cursor(cursor_factory=DictCursor)
+        cursor.execute(sql.replace("?", "%s"), parameters)
+        return PostgresCursor(cursor)
+
+    def executescript(self, sql):
+        with self._connection.cursor() as cursor:
+            cursor.execute(sql)
+
+    def commit(self):
+        self._connection.commit()
+
+    def rollback(self):
+        self._connection.rollback()
+
+    def close(self):
+        self._connection.close()
+
+
+def is_postgres(db=None):
+    return bool(os.environ.get("DATABASE_URL")) or isinstance(db, PostgresConnection)
+
+
 def get_db():
     if "db" not in g:
-        DATABASE.parent.mkdir(parents=True, exist_ok=True)
-        g.db = sqlite3.connect(DATABASE)
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
+        database_url = os.environ.get("DATABASE_URL")
+        if database_url:
+            g.db = PostgresConnection(psycopg2.connect(database_url))
+        else:
+            DATABASE.parent.mkdir(parents=True, exist_ok=True)
+            g.db = sqlite3.connect(DATABASE)
+            g.db.row_factory = sqlite3.Row
+            g.db.execute("PRAGMA foreign_keys = ON")
     return g.db
 
 
@@ -40,7 +90,42 @@ def close_db(error=None):
 
 def init_db():
     db = get_db()
-    db.executescript("""
+    postgres = is_postgres(db)
+    if postgres:
+        db.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('admin', 'student')),
+            must_change_password INTEGER NOT NULL DEFAULT 0,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP::text
+        );
+        CREATE TABLE IF NOT EXISTS students (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER UNIQUE NOT NULL REFERENCES users(id),
+            student_number TEXT UNIQUE NOT NULL,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
+            email TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS courses (
+            id SERIAL PRIMARY KEY,
+            course_code TEXT UNIQUE NOT NULL,
+            course_name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT ''
+        );
+        CREATE TABLE IF NOT EXISTS enrolments (
+            id SERIAL PRIMARY KEY,
+            student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+            course_id INTEGER NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+            enrolled_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP::text,
+            UNIQUE(student_id, course_id)
+        );
+        """)
+    else:
+        db.executescript("""
         CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
@@ -77,21 +162,27 @@ def init_db():
             FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
             FOREIGN KEY(course_id) REFERENCES courses(id) ON DELETE CASCADE
         );
-    """)
+        """)
 
-    course_columns = {
-        row["name"]
-        for row in db.execute("PRAGMA table_info(courses)").fetchall()
-    }
+    if postgres:
+        course_columns = {row["column_name"] for row in db.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'courses'"
+        ).fetchall()}
+    else:
+        course_columns = {row["name"] for row in db.execute(
+            "PRAGMA table_info(courses)").fetchall()}
     if "description" not in course_columns:
         db.execute(
             "ALTER TABLE courses ADD COLUMN description TEXT NOT NULL DEFAULT ''"
         )
 
-    columns = {
-        row["name"]
-        for row in db.execute("PRAGMA table_info(users)").fetchall()
-    }
+    if postgres:
+        columns = {row["column_name"] for row in db.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'users'"
+        ).fetchall()}
+    else:
+        columns = {row["name"] for row in db.execute(
+            "PRAGMA table_info(users)").fetchall()}
     if "username" not in columns:
         db.execute("ALTER TABLE users ADD COLUMN username TEXT")
     admin_username = os.environ.get("ADMIN_USERNAME", "admin")
@@ -296,7 +387,7 @@ def create_student():
             ),
         )
         db.commit()
-    except sqlite3.IntegrityError:
+    except (sqlite3.IntegrityError, psycopg2.IntegrityError):
         db.rollback()
         flash("Student ID already exists or the account could not be created.", "error")
         return redirect(url_for("admin_dashboard"))
@@ -387,7 +478,8 @@ def create_course():
             )
             db.commit()
             flash("Course created.", "success")
-        except sqlite3.IntegrityError:
+        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+            db.rollback()
             flash("That course code already exists.", "error")
 
     return redirect(url_for("admin_dashboard"))
@@ -431,7 +523,8 @@ def create_enrolment():
             )
             db.commit()
             flash("Student enrolled.", "success")
-        except sqlite3.IntegrityError:
+        except (sqlite3.IntegrityError, psycopg2.IntegrityError):
+            db.rollback()
             flash("That student is already enrolled in the course.", "error")
 
     return redirect(url_for("admin_dashboard"))

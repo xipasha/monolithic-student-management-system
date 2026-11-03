@@ -286,3 +286,48 @@ change `app.py` or application behavior.
 
 No manual recovery was needed. The workflow restored the previously recorded
 GHCR image tag and failed the run after verifying recovery, as designed.
+
+## Step 4: Define Azure resources with Bicep
+
+**Date:** 2026-11-03
+
+**Commits:** `a02a7db`, `284640c`, `db9a153`
+
+**Author:** Project team
+
+### What changed
+
+- Added Bicep definitions for the Linux B1 App Service plan, container web app,
+  HTTPS-only setting, `/health` endpoint, current app settings, user-assigned
+  GitHub OIDC identity, and its federated credentials.
+- Added a subscription-scoped custom role for ARM what-if and a resource-group
+  Reader assignment for CI. Website Contributor remains scoped to the app.
+- Added a CI Bicep build and a live what-if check. The check compares current
+  app-setting values in memory without printing them; `SECRET_KEY` comes from
+  the repository Actions secret and is a secure Bicep parameter.
+- Added README instructions for setting the secret and deploying into a new
+  resource group.
+- No application code or behavior changed.
+
+### Risk
+
+A mistaken template could change the live app, image, settings, or access.
+Review the what-if result before any Bicep deployment. The CI identity's
+resource-group Reader role exposes metadata for all resources in the shared
+`work` group; it has no resource-group Contributor permission.
+
+### Verification
+
+- `az bicep build` succeeded for both Bicep templates, and the parameter file
+  compiled with a process-only validation value.
+- The live Azure what-if check passed with no unexpected infrastructure
+  changes. Existing settings matched the template; setting values, including
+  `SECRET_KEY`, were not printed.
+- The GitHub CI what-if run is pending configuration of the repository Actions
+  secret `SECRET_KEY`.
+
+### Rollback
+
+No Bicep deployment was made to the App Service. The CI-only access grants can
+be removed by deleting their resource-group role assignments and the custom
+role definition if this what-if check is no longer needed.

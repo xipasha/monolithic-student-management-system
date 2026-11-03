@@ -202,3 +202,49 @@ Run the **Rollback** GitHub Actions workflow on `main` with the full commit SHA
 of a known-good GHCR image. If an automated deployment fails its health check,
 the deployment job restores the previously configured App Service runtime,
 checks its health, and then fails so the pipeline remains red.
+
+### Step 3b: Manual rollback rehearsal
+
+**Date:** 2026-11-03
+
+**Author:** Project team
+
+#### What was done
+
+Ran the manual **Rollback** workflow to deploy the Step 2 image
+`67425979991db0b4784934cdaf6990394c9514c3`, then ran it again with the current
+image `d6519729cfbb9768dbe6b539b4fa96051d23e0d7` to roll forward.
+
+#### Risk
+
+Low. Each image switch restarts the App Service and can cause brief downtime.
+The SQLite database is in the container filesystem and is not persistent.
+
+#### Verification
+
+- [Short-SHA validation run 41626037620](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41626037620)
+  failed at the image-pull validation step because the abbreviated SHA was not
+  a published tag. Azure login and deployment were skipped, so Azure was
+  untouched. See the [failure screenshot](docs/evidence/error%20rollback.png).
+- [Rollback run 41626466731](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41626466731)
+  deployed the full Step 2 SHA; image validation, Azure deployment, and the
+  health-check step all passed.
+- [Roll-forward run 41628331486](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41628331486)
+  deployed the full current SHA; image validation, Azure deployment, and the
+  health-check step all passed. See the [success screenshot](docs/evidence/success%20rollback.png).
+- The live App Service was subsequently confirmed to run
+  `d6519729cfbb9768dbe6b539b4fa96051d23e0d7`; `/health` returned HTTP 200.
+- Admin and student login checks are not confirmed by the workflow evidence
+  and remain pending manual verification.
+
+#### Rollback
+
+Use the **Rollback** workflow with a full, previously published image SHA.
+The abbreviated-SHA rehearsal demonstrates that invalid image tags fail
+validation before making changes to Azure.
+
+#### Known gap
+
+This rehearsal verifies manual rollback and roll-forward. Automatic rollback
+after a health-check failure has not yet been deliberately exercised; that
+failure-path rehearsal remains Step 3c.

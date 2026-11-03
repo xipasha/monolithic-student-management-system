@@ -149,3 +149,56 @@ runs for pushes to `main`.
 
 Deploy the previous image using its commit-SHA tag. Do not rely on a mutable
 `latest` tag.
+
+## Step 3: Run the GHCR image on Azure App Service
+
+**Date:** 2026-11-03
+
+**Commits:** `c8165a6`, `c8a831c`, `133a71e`, `71c320b`, `2590a48`
+
+**Author:** Project team
+
+### What changed
+
+- Added `scripts/deploy-container.sh` to deploy a validated full-SHA GHCR image
+  to the existing App Service. It requires the existing `SECRET_KEY` to be
+  present, preserves it, sets `WEBSITES_PORT=8000`, and configures `/health`.
+- Added a main-branch CI deployment job gated on successful image publishing.
+  GitHub Actions authenticates to Azure using OIDC through a dedicated
+  user-assigned managed identity scoped to this App Service.
+- The deploy job records the configured runtime before changing it, polls the
+  public health endpoint, and restores and checks the prior runtime if health
+  verification fails. It fails the workflow after attempting recovery.
+- Added a manually triggered rollback workflow that deploys a selected
+  commit-SHA image and restores the previous runtime if the selected image
+  does not become healthy.
+- Captured the deployed login page in
+  [docs/evidence/app-service-login.png](docs/evidence/app-service-login.png).
+- No application behavior or `app.py` business logic changed.
+
+### Risk
+
+- App Service may have brief downtime while the container restarts.
+- SQLite is stored in the container filesystem and is not persistent; replacing
+  the container can reset application data.
+
+### Verification
+
+GitHub Actions run
+[41623886088](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41623886088)
+passed tests, coverage, secret scanning, container build and smoke test, image
+publication, OIDC authentication, and App Service deployment.
+
+The deployed image is
+`ghcr.io/xipasha/monolithic-student-management-system:2590a4853d9d612be2f5c2cc84ff7c2313f87e66`.
+The App Service reports `/health` as its health-check path and
+`WEBSITES_PORT=8000`; the live
+[health endpoint](https://sms-student-management-20261103.azurewebsites.net/health)
+returned HTTP 200 with `{"application":"Student Management System","status":"ok"}`.
+
+### Rollback
+
+Run the **Rollback** GitHub Actions workflow on `main` with the full commit SHA
+of a known-good GHCR image. If an automated deployment fails its health check,
+the deployment job restores the previously configured App Service runtime,
+checks its health, and then fails so the pipeline remains red.

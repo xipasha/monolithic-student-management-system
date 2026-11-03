@@ -1,5 +1,5 @@
 
-FROM python:3.13-slim
+FROM python:3.13.7-slim-bookworm
 
 WORKDIR /app
 
@@ -12,8 +12,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 COPY templates/ ./templates/
 
-RUN mkdir -p /app/instance
+RUN groupadd --system app && useradd --system --gid app --home-dir /app app \
+    && mkdir -p /app/instance \
+    && chown app:app /app/instance
+
+USER app
 
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "app:app"]
+CMD ["sh", "-c", "exec gunicorn --bind 0.0.0.0:${PORT:-8000} --workers 1 --threads 4 app:app"]

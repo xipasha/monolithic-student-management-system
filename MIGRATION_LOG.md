@@ -291,7 +291,7 @@ GHCR image tag and failed the run after verifying recovery, as designed.
 
 **Date:** 2026-11-03
 
-**Commits:** `a02a7db`, `284640c`, `db9a153`
+**Commits:** `a02a7db`, `284640c`, `db9a153`, `9d28988`
 
 **Author:** Project team
 
@@ -305,6 +305,10 @@ GHCR image tag and failed the run after verifying recovery, as designed.
 - Added a CI Bicep build and a live what-if check. The check compares current
   app-setting values in memory without printing them; `SECRET_KEY` comes from
   the repository Actions secret and is a secure Bicep parameter.
+- The live-resource CI what-if excludes identity and role-assignment writes,
+  which are outside the deployment identity's permissions. Those resources
+  remain defined in Bicep for authorized provisioning; the CI gate checks the
+  web app and its settings.
 - Added README instructions for setting the secret and deploying into a new
   resource group.
 - No application code or behavior changed.
@@ -323,8 +327,10 @@ resource-group Reader role exposes metadata for all resources in the shared
 - The live Azure what-if check passed with no unexpected infrastructure
   changes. Existing settings matched the template; setting values, including
   `SECRET_KEY`, were not printed.
-- The GitHub CI what-if run is pending configuration of the repository Actions
-  secret `SECRET_KEY`.
+- GitHub Actions run
+  [41654116689](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41654116689)
+  passed template builds, secret scanning, tests, coverage, container checks,
+  live Azure what-if, deployment, and the health check.
 
 ### Rollback
 

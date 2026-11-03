@@ -75,7 +75,7 @@ jobs:
           exit 1
 
       - name: Restore previously configured runtime and verify health
-        if: always() && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success')
+        if: always() && steps.previous.outcome == 'success' && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success')
         continue-on-error: true
         env:
           PREVIOUS_RUNTIME: ${{ steps.previous.outputs.runtime }}

@@ -93,3 +93,92 @@ jobs:
           context: .
           push: true
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+  deploy-app-service:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: publish-image
+    concurrency:
+      group: sms-app-service-deployment
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: dfd6e7ba-fca0-482a-a91c-fa4b3143446d
+      AZURE_TENANT_ID: 816691e0-63cf-49e9-be3f-b237b7e2f6ca
+      AZURE_SUBSCRIPTION_ID: 74577974-a069-4c7e-90ea-9f06a0aaa0f5
+      AZURE_RESOURCE_GROUP: work
+      AZURE_WEBAPP_NAME: sms-student-management-20261103
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Confirm image is anonymously pullable
+        run: docker pull "ghcr.io/xipasha/monolithic-student-management-system:${{ github.sha }}"
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Record currently configured App Service runtime
+        id: previous
+        run: |
+          previous_runtime="$(az webapp config show \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query linuxFxVersion --output tsv)"
+          if [[ -z "$previous_runtime" || "$previous_runtime" == "None" ]]; then
+            echo "Could not determine the currently configured App Service runtime." >&2
+            exit 1
+          fi
+          echo "runtime=$previous_runtime" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy commit-SHA image
+        id: deploy
+        continue-on-error: true
+        run: bash scripts/deploy-container.sh "${{ github.sha }}"
+
+      - name: Wait for application health
+        id: health
+        run: |
+          health_url="https://sms-student-management-20261103.azurewebsites.net/health"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 4 "$health_url"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Application health check did not return HTTP 200 within 3 minutes." >&2
+          exit 1
+
+      - name: Restore previous runtime and verify health
+        if: always() && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success')
+        continue-on-error: true
+        env:
+          PREVIOUS_RUNTIME: ${{ steps.previous.outputs.runtime }}
+        run: |
+          if [[ -z "$PREVIOUS_RUNTIME" ]]; then
+            echo "No previous runtime was recorded; cannot restore automatically." >&2
+            exit 1
+          fi
+          bash scripts/deploy-container.sh --restore "$PREVIOUS_RUNTIME"
+
+          health_url="https://sms-student-management-20261103.azurewebsites.net/health"
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 4 "$health_url"; then
+              echo "Previous runtime restored and healthy."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Restored runtime did not become healthy." >&2
+          exit 1
+
+      - name: Fail deployment after unsuccessful update or rollback
+        if: always() && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success')
+        run: exit 1

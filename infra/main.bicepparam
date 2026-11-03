@@ -1,0 +1,9 @@
+using './main.bicep'
+
+param location = 'southafricanorth'
+param appName = 'sms-student-management-20261103'
+param appServicePlanName = 'sikalumbit30_asp_8006'
+param identityName = 'sms-github-deploy'
+param websiteContributorAssignmentName = 'e824bd71-5741-44df-9db5-762b334c6be6'
+param containerImage = 'ghcr.io/xipasha/monolithic-student-management-system:3de04ed11878d7a91599a3bd222f1106993334d7'
+param secretKey = readEnvironmentVariable('SECRET_KEY')

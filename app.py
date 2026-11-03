@@ -3,6 +3,7 @@ import secrets
 import sqlite3
 from functools import wraps
 from pathlib import Path
+from urllib.parse import unquote
 
 from flask import (
     Flask, abort, flash, g, redirect,
@@ -65,17 +66,26 @@ class PostgresConnection:
 
 
 def is_postgres(db=None):
-    return bool(os.environ.get("DATABASE_URL")) or isinstance(db, PostgresConnection)
+    database_url = os.environ.get("DATABASE_URL", "")
+    return database_url.startswith(("postgres://", "postgresql://")) or isinstance(
+        db, PostgresConnection
+    )
 
 
 def get_db():
     if "db" not in g:
         database_url = os.environ.get("DATABASE_URL")
-        if database_url:
+        if database_url and database_url.startswith(("postgres://", "postgresql://")):
             g.db = PostgresConnection(psycopg2.connect(database_url))
         else:
-            DATABASE.parent.mkdir(parents=True, exist_ok=True)
-            g.db = sqlite3.connect(DATABASE)
+            if database_url:
+                if not database_url.startswith("sqlite:///"):
+                    raise RuntimeError("DATABASE_URL must use PostgreSQL or SQLite.")
+                database_path = Path(unquote(database_url[len("sqlite:///"):]))
+            else:
+                database_path = DATABASE
+            database_path.parent.mkdir(parents=True, exist_ok=True)
+            g.db = sqlite3.connect(database_path)
             g.db.row_factory = sqlite3.Row
             g.db.execute("PRAGMA foreign_keys = ON")
     return g.db

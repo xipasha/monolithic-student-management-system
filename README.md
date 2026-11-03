@@ -111,8 +111,9 @@ the SQLite file unchanged as the rollback copy. Do not point the app at
 PostgreSQL until the migration completes and the copied row counts have been
 reviewed.
 
-To roll back the application, set `DATABASE_URL` to empty/unset so the app
-falls back to its SQLite database, then restart/redeploy the prior container.
+To roll back the application, point `DATABASE_URL` at a restored SQLite file,
+for example `sqlite:////app/instance/sms.db`, then restart/redeploy the prior
+container. Unsetting `DATABASE_URL` uses the default `instance/sms.db` path.
 This only restores data present in the SQLite copy. Writes made after cutover
 exist only in PostgreSQL and must be exported or reconciled before rollback.
 The current container configuration does not persist its SQLite directory, so

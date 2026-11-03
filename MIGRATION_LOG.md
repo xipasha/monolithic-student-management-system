@@ -389,6 +389,7 @@ back during rollback.
 ### Rollback
 
 Before cutover, retain the source SQLite file unchanged. To return the app to
-SQLite, unset `DATABASE_URL` and redeploy/restart the prior container. This
+SQLite, point `DATABASE_URL` at the retained SQLite file (or unset it to use
+the default `instance/sms.db` path) and redeploy/restart the prior container. This
 restores only the SQLite copy; PostgreSQL writes made after cutover require a
 separate export or reconciliation before rollback.

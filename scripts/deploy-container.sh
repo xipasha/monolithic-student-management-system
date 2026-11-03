@@ -7,7 +7,7 @@ readonly IMAGE_REPOSITORY="ghcr.io/xipasha/monolithic-student-management-system"
 readonly REGISTRY_URL="https://ghcr.io"
 
 usage() {
-    echo "Usage: $0 <40-character-image-sha> | --restore <linuxFxVersion>" >&2
+    echo "Usage: $0 <40-character-image-sha> [port] | --restore <linuxFxVersion>" >&2
     exit 2
 }
 
@@ -29,6 +29,7 @@ fi
 unset secret_key
 
 configure_app_service() {
+    local port="$1"
     local health_config
     health_config="$(mktemp)"
     printf '{"healthCheckPath":"/health"}\n' > "$health_config"
@@ -36,7 +37,7 @@ configure_app_service() {
     az webapp config appsettings set \
         --name "$WEBAPP_NAME" \
         --resource-group "$RESOURCE_GROUP" \
-        --settings WEBSITES_PORT=8000 \
+        --settings "WEBSITES_PORT=$port" \
         --output none
 
     az webapp config set \
@@ -52,6 +53,7 @@ case "$1" in
     --restore)
         [[ $# -eq 2 ]] || usage
         previous_runtime="$2"
+        port=8000
         if [[ "$previous_runtime" == "DOCKER|${IMAGE_REPOSITORY}:"* ]]; then
             image_sha="${previous_runtime##*:}"
             if [[ ! "$image_sha" =~ ^[[:xdigit:]]{40}$ ]]; then
@@ -76,10 +78,15 @@ case "$1" in
         fi
         ;;
     *)
-        [[ $# -eq 1 ]] || usage
+        [[ $# -ge 1 && $# -le 2 ]] || usage
         image_sha="$1"
+        port="${2:-8000}"
         if [[ ! "$image_sha" =~ ^[[:xdigit:]]{40}$ ]]; then
             echo "Image SHA must be exactly 40 hexadecimal characters." >&2
+            exit 2
+        fi
+        if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( port < 1 || port > 65535 )); then
+            echo "Port must be an integer between 1 and 65535." >&2
             exit 2
         fi
         image_sha="${image_sha,,}"
@@ -92,4 +99,4 @@ case "$1" in
         ;;
 esac
 
-configure_app_service
+configure_app_service "$port"

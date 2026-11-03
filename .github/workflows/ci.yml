@@ -6,6 +6,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      simulate_failure:
+        description: Deploy with an invalid App Service port to rehearse automatic rollback
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   tests:
@@ -95,9 +102,17 @@ jobs:
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
 
   deploy-app-service:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: |
+      always() &&
+      github.ref == 'refs/heads/main' &&
+      needs.tests.result == 'success' &&
+      needs.container-build-smoke.result == 'success' &&
+      (
+        (github.event_name == 'push' && needs.publish-image.result == 'success') ||
+        github.event_name == 'workflow_dispatch'
+      )
     runs-on: ubuntu-latest
-    needs: publish-image
+    needs: [tests, container-build-smoke, publish-image]
     concurrency:
       group: sms-app-service-deployment
       cancel-in-progress: false
@@ -127,6 +142,8 @@ jobs:
 
       - name: Record currently configured App Service runtime
         id: previous
+        env:
+          SIMULATE_FAILURE: ${{ inputs.simulate_failure }}
         run: |
           previous_runtime="$(az webapp config show \
             --name "$AZURE_WEBAPP_NAME" \
@@ -136,19 +153,37 @@ jobs:
             echo "Could not determine the currently configured App Service runtime." >&2
             exit 1
           fi
+          if [[ "$SIMULATE_FAILURE" == "true" && "$previous_runtime" != "DOCKER|ghcr.io/xipasha/monolithic-student-management-system:"* ]]; then
+            echo "Failure simulation requires an existing GHCR container image to restore." >&2
+            exit 1
+          fi
           echo "runtime=$previous_runtime" >> "$GITHUB_OUTPUT"
 
       - name: Deploy commit-SHA image
         id: deploy
         continue-on-error: true
-        run: bash scripts/deploy-container.sh "${{ github.sha }}"
+        env:
+          SIMULATE_FAILURE: ${{ inputs.simulate_failure }}
+        run: |
+          if [[ "$SIMULATE_FAILURE" == "true" ]]; then
+            echo "Simulating deployment failure with WEBSITES_PORT=9999."
+            bash scripts/deploy-container.sh "${{ github.sha }}" 9999
+          else
+            bash scripts/deploy-container.sh "${{ github.sha }}"
+          fi
 
       - name: Wait for application health
         id: health
+        env:
+          SIMULATE_FAILURE: ${{ inputs.simulate_failure }}
         run: |
           health_url="https://sms-student-management-20261103.azurewebsites.net/health"
           for attempt in $(seq 1 30); do
             if curl --fail --silent --show-error --max-time 4 "$health_url"; then
+              if [[ "$SIMULATE_FAILURE" == "true" ]]; then
+                echo "Failure simulation unexpectedly returned healthy; forcing restoration." >&2
+                exit 1
+              fi
               exit 0
             fi
             sleep 2
@@ -167,6 +202,15 @@ jobs:
             exit 1
           fi
           bash scripts/deploy-container.sh --restore "$PREVIOUS_RUNTIME"
+          restored_runtime="$(az webapp config show \
+            --name "$AZURE_WEBAPP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query linuxFxVersion --output tsv)"
+          if [[ "$restored_runtime" != "$PREVIOUS_RUNTIME" ]]; then
+            echo "Restored runtime '$restored_runtime' does not match previous image '$PREVIOUS_RUNTIME'." >&2
+            exit 1
+          fi
+          echo "Confirmed previous image restored: $restored_runtime"
 
           health_url="https://sms-student-management-20261103.azurewebsites.net/health"
           for attempt in $(seq 1 30); do

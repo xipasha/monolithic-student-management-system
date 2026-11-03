@@ -8,7 +8,7 @@ on:
     branches: [main]
 
 jobs:
-  test-and-build:
+  tests:
     runs-on: ubuntu-latest
 
     steps:
@@ -37,5 +37,33 @@ jobs:
           SECRET_KEY: ci-test-secret
         run: python -m pytest -v --cov=app --cov-report=term-missing --cov-fail-under=60
 
-      - name: Build Docker image
-        run: docker build -t student-management-system:${{ github.sha }} .
+  container-build-smoke:
+    runs-on: ubuntu-latest
+    needs: tests
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Build container image
+        run: docker build --pull -t student-management-system:${{ github.sha }} .
+
+      - name: Start container and verify health endpoint
+        run: |
+          docker run --detach --name student-management-system-smoke \
+            --publish 8000:8000 \
+            --env SECRET_KEY=ci-test-secret \
+            --env PORT=8000 \
+            student-management-system:${{ github.sha }}
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then
+              docker rm --force student-management-system-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs student-management-system-smoke
+          docker rm --force student-management-system-smoke
+          exit 1

@@ -138,10 +138,12 @@ The application also requires `SECRET_KEY` to be supplied at runtime.
 
 ### Verification
 
-The CI workflow runs the test and coverage gate before building the image,
-starts the container with a test secret, and requires `/health` to return
-success before the image can be published to GHCR. The publish job only runs
-for pushes to `main`.
+GitHub Actions run [41616403244](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41616403244)
+passed the secret scan, unit tests and coverage gate, container build, and
+container health check. The GHCR publish job succeeded with the image tag
+`ghcr.io/xipasha/monolithic-student-management-system:26d8bd6e7081bcdb8a40201c8887926d2edef9cd`.
+Publishing is gated on successful tests and the container smoke test, and only
+runs for pushes to `main`.
 
 ### Rollback
 

@@ -22,6 +22,15 @@ def client(tmp_path, monkeypatch):
         SECRET_KEY="test-secret-key",
     )
 
+    if os.environ.get("DATABASE_URL", "").startswith(("postgres://", "postgresql://")):
+        with application.app.app_context():
+            db = application.get_db()
+            db.execute("DROP TABLE IF EXISTS enrolments CASCADE")
+            db.execute("DROP TABLE IF EXISTS students CASCADE")
+            db.execute("DROP TABLE IF EXISTS courses CASCADE")
+            db.execute("DROP TABLE IF EXISTS users CASCADE")
+            db.commit()
+
     with application.app.test_client() as client:
         yield client
 

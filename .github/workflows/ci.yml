@@ -17,6 +17,24 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: sms_test
+          POSTGRES_USER: sms
+          POSTGRES_PASSWORD: test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sms -d sms_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Check out repository
@@ -49,6 +67,7 @@ jobs:
       - name: Run automated tests with coverage gate
         env:
           SECRET_KEY: ci-test-secret
+          DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql://sms:test-password@localhost:5432/sms_test' || '' }}
         run: python -m pytest -v --cov=app --cov-report=term-missing --cov-fail-under=60
 
   container-build-smoke:
@@ -148,6 +167,8 @@ jobs:
       - name: Check Bicep template against live Azure resources
         env:
           SECRET_KEY: ${{ secrets.SECRET_KEY }}
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: bash scripts/infra-whatif.sh
 
       - name: Record currently configured App Service runtime

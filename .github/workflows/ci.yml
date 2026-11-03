@@ -164,6 +164,17 @@ jobs:
           if [[ "$SIMULATE_FAILURE" == "true" ]]; then
             echo "Simulating deployment failure with WEBSITES_PORT=9999."
             bash scripts/deploy-container.sh "${{ github.sha }}" 9999
+            configured_port="$(az webapp config appsettings list \
+              --name "$AZURE_WEBAPP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --query "[?name=='WEBSITES_PORT'].value | [0]" --output tsv)"
+            if [[ "$configured_port" != "9999" ]]; then
+              echo "Expected WEBSITES_PORT=9999, got '$configured_port'." >&2
+              exit 1
+            fi
+            az webapp restart \
+              --name "$AZURE_WEBAPP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP"
           else
             bash scripts/deploy-container.sh "${{ github.sha }}"
           fi

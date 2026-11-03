@@ -95,7 +95,7 @@ az deployment group what-if \
   --resource-group "$resource_group" \
   --template-file infra/main.bicep \
   --parameters infra/main.bicepparam \
-  --parameters createAppServicePlan=false \
+  --parameters createAppServicePlan=false manageDeploymentIdentity=false \
     deploymentIdentityPrincipalId="$identity_principal_id" \
     containerImage="$container_image" \
   --result-format FullResourcePayloads \

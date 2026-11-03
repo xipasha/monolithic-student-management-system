@@ -18,6 +18,9 @@ param identityName string
 @description('Optional current principal ID for no-drift checks against an existing identity.')
 param deploymentIdentityPrincipalId string = ''
 
+@description('Create or manage the GitHub identity and its role assignments.')
+param manageDeploymentIdentity bool = true
+
 @description('Role-assignment GUID; use a new GUID for a separate app deployment.')
 param websiteContributorAssignmentName string
 
@@ -31,7 +34,7 @@ param secretKey string
 var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
 var whatIfRoleId = '3db1392d-2f72-47f3-9453-6860731aa1f0'
 var websiteContributorRoleId = 'de139f84-1756-47ae-9be6-808fbbe84772'
-var effectivePrincipalId = empty(deploymentIdentityPrincipalId) ? deploymentIdentity.properties.principalId : deploymentIdentityPrincipalId
+var effectivePrincipalId = empty(deploymentIdentityPrincipalId) ? deploymentIdentity!.properties.principalId : deploymentIdentityPrincipalId
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = if (createAppServicePlan) {
   name: appServicePlanName
@@ -87,12 +90,12 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
   }
 }
 
-resource deploymentIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+resource deploymentIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = if (manageDeploymentIdentity) {
   name: identityName
   location: location
 }
 
-resource githubMainCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+resource githubMainCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = if (manageDeploymentIdentity) {
   parent: deploymentIdentity
   name: 'github-main'
   properties: {
@@ -104,7 +107,7 @@ resource githubMainCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/
   }
 }
 
-resource githubMainImmutableCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+resource githubMainImmutableCredential 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = if (manageDeploymentIdentity) {
   parent: deploymentIdentity
   name: 'github-main-immutable-ids'
   properties: {
@@ -116,7 +119,7 @@ resource githubMainImmutableCredential 'Microsoft.ManagedIdentity/userAssignedId
   }
 }
 
-resource websiteContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource websiteContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageDeploymentIdentity) {
   scope: webApp
   name: websiteContributorAssignmentName
   properties: {
@@ -125,7 +128,7 @@ resource websiteContributorAssignment 'Microsoft.Authorization/roleAssignments@2
   }
 }
 
-resource ciResourceReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource ciResourceReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageDeploymentIdentity) {
   scope: resourceGroup()
   name: guid(resourceGroup().id, deploymentIdentity.id, readerRoleId)
   properties: {
@@ -135,7 +138,7 @@ resource ciResourceReaderAssignment 'Microsoft.Authorization/roleAssignments@202
   }
 }
 
-resource ciWhatIfAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource ciWhatIfAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageDeploymentIdentity) {
   scope: resourceGroup()
   name: guid(resourceGroup().id, deploymentIdentity.id, whatIfRoleId)
   properties: {

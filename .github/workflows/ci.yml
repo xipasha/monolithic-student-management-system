@@ -24,6 +24,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Build infrastructure templates
+        uses: azure/cli@v2
+        with:
+          inlineScript: |
+            az bicep build --file infra/main.bicep --outfile /tmp/sms-main.json
+            az bicep build --file infra/what-if-role.bicep --outfile /tmp/sms-what-if-role.json
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -121,6 +128,8 @@ jobs:
       AZURE_SUBSCRIPTION_ID: 74577974-a069-4c7e-90ea-9f06a0aaa0f5
       AZURE_RESOURCE_GROUP: work
       AZURE_WEBAPP_NAME: sms-student-management-20261103
+      AZURE_APPSERVICE_PLAN_NAME: sikalumbit30_asp_8006
+      AZURE_IDENTITY_NAME: sms-github-deploy
 
     steps:
       - name: Check out repository
@@ -135,6 +144,11 @@ jobs:
           client-id: ${{ env.AZURE_CLIENT_ID }}
           tenant-id: ${{ env.AZURE_TENANT_ID }}
           subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Check Bicep template against live Azure resources
+        env:
+          SECRET_KEY: ${{ secrets.SECRET_KEY }}
+        run: bash scripts/infra-whatif.sh
 
       - name: Record currently configured App Service runtime
         id: previous

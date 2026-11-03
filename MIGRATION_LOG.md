@@ -3,7 +3,7 @@
 ## Step 0: Baseline deployment (Azure App Service)
 
 **Date:** 2026-11-03  
-**Commit/tag:** Not created yet  
+**Commit/tag:** [`step-0-baseline`](https://github.com/xipasha/monolithic-student-management-system/releases/tag/step-0-baseline)  
 **Author:** Project team
 
 ### What changed
@@ -64,3 +64,44 @@ Manual login and course-management flow verification is still pending.
 
 Rollback can be performed by redeploying the previous application source or
 removing the Azure App Service deployment.
+
+## Step 1: Baseline hardening and characterisation coverage
+
+**Date:** 2026-11-03  
+**Commit:** `64cdf97`  
+**Author:** Project team
+
+### What changed
+
+- Removed the insecure fallback Flask `SECRET_KEY`; the application now fails
+  during startup when `SECRET_KEY` is not configured.
+- Added a full-history Gitleaks scan to the CI workflow.
+- Added characterisation tests for authentication, student lifecycle actions,
+  password reset and change flows, course management, enrolments, and student
+  profile/course viewing.
+- Added pytest coverage reporting with a 60% minimum CI threshold.
+- Added README instructions for the Azure baseline deployment.
+
+### Risk
+
+The application now intentionally refuses to start without `SECRET_KEY`.
+Deployments must provide that setting through the platform environment or
+secret configuration. The tests assert existing behavior and do not change
+the application flow.
+
+### Verification
+
+Local validation completed:
+
+```text
+14 passed
+81.01% coverage
+```
+
+Gitleaks scanned all 12 commits and found no secrets. Importing the
+application without `SECRET_KEY` fails with the expected runtime error.
+
+### Rollback
+
+Revert commit `64cdf97` or redeploy the `step-0-baseline` tag. Any deployment
+rollback must continue to provide the configured App Service `SECRET_KEY`.

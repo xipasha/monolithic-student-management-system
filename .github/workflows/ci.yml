@@ -351,11 +351,10 @@ jobs:
                           "(SELECT id FROM students WHERE student_number ~ '^STEP5[0-9]+$')"
                       )
                       cursor.execute(
-                          "DELETE FROM users WHERE id IN "
-                          "(SELECT user_id FROM students WHERE student_number ~ '^STEP5[0-9]+$')"
+                          "DELETE FROM students WHERE student_number ~ '^STEP5[0-9]+$'"
                       )
                       cursor.execute(
-                          "DELETE FROM students WHERE student_number ~ '^STEP5[0-9]+$'"
+                          "DELETE FROM users WHERE username ~ '^student_STEP5[0-9]+$'"
                       )
                       cursor.execute("SELECT COUNT(*) FROM students")
                       if cursor.fetchone()[0] != 0:

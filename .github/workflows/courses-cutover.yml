@@ -2,6 +2,12 @@ name: Courses service cutover
 
 on:
   workflow_dispatch:
+    inputs:
+      confirm_cutover:
+        description: Confirm the write freeze and courses service cutover
+        required: true
+        default: false
+        type: boolean
 
 concurrency:
   group: sms-courses-service-deployment
@@ -61,6 +67,11 @@ jobs:
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -Eeuo pipefail
+
+          if [[ "${{ inputs.confirm_cutover }}" != "true" ]]; then
+            echo "Set confirm_cutover=true to execute the requested cutover." >&2
+            exit 1
+          fi
 
           if [[ -z "$ADMIN_PASSWORD" || -z "$DATABASE_URL" || -z "$COURSES_DATABASE_URL" || \
                 -z "$COURSES_SERVICE_TOKEN" || -z "$POSTGRES_ADMIN_PASSWORD" || -z "$COURSES_SERVICE_URL" ]]; then

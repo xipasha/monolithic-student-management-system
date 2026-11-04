@@ -142,6 +142,24 @@ def test_admin_can_create_course(client):
     assert course["description"] == "A test course"
 
 
+def test_courses_service_failure_renders_503_page(client, monkeypatch):
+    from courses_client import CoursesServiceUnavailable
+
+    monkeypatch.setenv("COURSES_SERVICE_ENABLED", "true")
+
+    def unavailable(*_args, **_kwargs):
+        raise CoursesServiceUnavailable("test outage")
+
+    monkeypatch.setattr(application, "courses_service_call", unavailable)
+    client.post(
+        "/login",
+        data={"login_id": "testadmin", "password": "TestAdminPassword123!"},
+    )
+    response = client.get("/admin")
+    assert response.status_code == 503
+    assert b"Courses are temporarily unavailable" in response.data
+
+
 def test_admin_can_create_student(client):
     login(client, "testadmin", "TestAdminPassword123!")
     response = client.post(

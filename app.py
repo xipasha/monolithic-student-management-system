@@ -16,6 +16,11 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import psycopg2
 from psycopg2.extras import DictCursor
 from notifications import publish_student_event
+from courses_client import (
+    CoursesServiceUnavailable,
+    request_courses_service,
+    student_courses_path,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -75,6 +80,20 @@ def is_postgres(db=None):
     return database_url.startswith(("postgres://", "postgresql://")) or isinstance(
         db, PostgresConnection
     )
+
+
+def courses_service_enabled():
+    return os.environ.get("COURSES_SERVICE_ENABLED", "false").strip().lower() == "true"
+
+
+def courses_service_call(method, path, payload=None):
+    return request_courses_service(
+        method, path, payload=payload, correlation_id=getattr(g, "correlation_id", None)
+    )
+
+
+def courses_service_error():
+    return render_template("service_unavailable.html"), 503
 
 
 def get_db():
@@ -363,25 +382,46 @@ def logout():
 @login_required("admin")
 def admin_dashboard():
     db = get_db()
-    counts = {
-        "students": db.execute("SELECT COUNT(*) FROM students").fetchone()[0],
-        "courses": db.execute("SELECT COUNT(*) FROM courses").fetchone()[0],
-        "enrolments": db.execute("SELECT COUNT(*) FROM enrolments").fetchone()[0],
-    }
+    if courses_service_enabled():
+        try:
+            _, courses = courses_service_call("GET", "/api/courses")
+            _, enrolments = courses_service_call("GET", "/api/enrolments")
+        except CoursesServiceUnavailable:
+            return courses_service_error()
+        counts = {
+            "students": db.execute("SELECT COUNT(*) FROM students").fetchone()[0],
+            "courses": len(courses),
+            "enrolments": len(enrolments),
+        }
+    else:
+        counts = {
+            "students": db.execute("SELECT COUNT(*) FROM students").fetchone()[0],
+            "courses": db.execute("SELECT COUNT(*) FROM courses").fetchone()[0],
+            "enrolments": db.execute("SELECT COUNT(*) FROM enrolments").fetchone()[0],
+        }
     students = db.execute(
         """SELECT s.*, u.username, u.active
            FROM students s JOIN users u ON u.id = s.user_id
            ORDER BY s.id DESC"""
     ).fetchall()
-    courses = db.execute("SELECT * FROM courses ORDER BY course_code").fetchall()
-    enrolments = db.execute(
-        """SELECT e.id, s.student_number, s.first_name, s.last_name,
-                  c.course_code, c.course_name
-           FROM enrolments e
-           JOIN students s ON s.id = e.student_id
-           JOIN courses c ON c.id = e.course_id
-           ORDER BY e.id DESC"""
-    ).fetchall()
+    if not courses_service_enabled():
+        courses = db.execute("SELECT * FROM courses ORDER BY course_code").fetchall()
+        enrolments = db.execute(
+            """SELECT e.id, s.student_number, s.first_name, s.last_name,
+                      c.course_code, c.course_name
+               FROM enrolments e
+               JOIN students s ON s.id = e.student_id
+               JOIN courses c ON c.id = e.course_id
+               ORDER BY e.id DESC"""
+        ).fetchall()
+    else:
+        for enrolment in enrolments:
+            student = db.execute(
+                "SELECT first_name, last_name FROM students WHERE student_number = ?",
+                (enrolment["student_number"],),
+            ).fetchone()
+            enrolment["first_name"] = student["first_name"] if student else ""
+            enrolment["last_name"] = student["last_name"] if student else ""
     return render_template(
         "admin.html", counts=counts, students=students,
         courses=courses, enrolments=enrolments
@@ -513,6 +553,20 @@ def create_course():
 
     if not code or not name:
         flash("Course code and course name are required.", "error")
+    elif courses_service_enabled():
+        try:
+            status, _ = courses_service_call(
+                "POST", "/api/courses",
+                {"course_code": code, "course_name": name, "description": description},
+            )
+        except CoursesServiceUnavailable:
+            return courses_service_error()
+        if status == 201:
+            flash("Course created.", "success")
+        elif status == 409:
+            flash("That course code already exists.", "error")
+        else:
+            flash("Course code and course name are required.", "error")
     else:
         try:
             db = get_db()
@@ -533,6 +587,13 @@ def create_course():
 @app.post("/admin/courses/<int:course_id>/delete")
 @login_required("admin")
 def delete_course(course_id):
+    if courses_service_enabled():
+        try:
+            courses_service_call("DELETE", f"/api/courses/{course_id}")
+        except CoursesServiceUnavailable:
+            return courses_service_error()
+        flash("Course deleted if it existed.", "success")
+        return redirect(url_for("admin_dashboard"))
     db = get_db()
     db.execute("DELETE FROM courses WHERE id = ?", (course_id,))
     db.commit()
@@ -554,12 +615,34 @@ def create_enrolment():
         (student_id,),
     ).fetchone() if student_id else None
 
-    course = db.execute(
-        "SELECT id FROM courses WHERE id = ?", (course_id,)
-    ).fetchone() if course_id else None
+    if courses_service_enabled():
+        course = bool(course_id)
+    else:
+        course = db.execute(
+            "SELECT id FROM courses WHERE id = ?", (course_id,)
+        ).fetchone() if course_id else None
 
     if not student or not course:
         flash("Select a valid active student and course.", "error")
+    elif courses_service_enabled():
+        student_number = db.execute(
+            "SELECT student_number FROM students WHERE id = ?", (student_id,)
+        ).fetchone()["student_number"]
+        try:
+            status, _ = courses_service_call(
+                "POST", "/api/enrolments",
+                {"course_id": course_id, "student_number": student_number},
+            )
+        except CoursesServiceUnavailable:
+            return courses_service_error()
+        if status == 201:
+            flash("Student enrolled.", "success")
+        elif status == 409:
+            flash("That student is already enrolled in the course.", "error")
+        elif status == 404:
+            flash("Select a valid active student and course.", "error")
+        else:
+            flash("Could not create the enrolment.", "error")
     else:
         try:
             db.execute(
@@ -578,6 +661,13 @@ def create_enrolment():
 @app.post("/admin/enrolments/<int:enrolment_id>/delete")
 @login_required("admin")
 def delete_enrolment(enrolment_id):
+    if courses_service_enabled():
+        try:
+            courses_service_call("DELETE", f"/api/enrolments/{enrolment_id}")
+        except CoursesServiceUnavailable:
+            return courses_service_error()
+        flash("Enrolment removed if it existed.", "success")
+        return redirect(url_for("admin_dashboard"))
     db = get_db()
     db.execute("DELETE FROM enrolments WHERE id = ?", (enrolment_id,))
     db.commit()
@@ -620,12 +710,20 @@ def student_dashboard():
     if not student:
         abort(404)
 
-    courses = db.execute(
-        """SELECT c.course_code, c.course_name, e.enrolled_at
-           FROM enrolments e JOIN courses c ON c.id = e.course_id
-           WHERE e.student_id = ? ORDER BY c.course_code""",
-        (student["id"],),
-    ).fetchall()
+    if courses_service_enabled():
+        try:
+            _, courses = courses_service_call(
+                "GET", student_courses_path(student["student_number"])
+            )
+        except CoursesServiceUnavailable:
+            return courses_service_error()
+    else:
+        courses = db.execute(
+            """SELECT c.course_code, c.course_name, e.enrolled_at
+               FROM enrolments e JOIN courses c ON c.id = e.course_id
+               WHERE e.student_id = ? ORDER BY c.course_code""",
+            (student["id"],),
+        ).fetchall()
 
     return render_template("student.html", student=student, courses=courses)
 

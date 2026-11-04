@@ -639,6 +639,60 @@ student account and automatically restored the previous image.
   a background executor and reuses a credential per worker. The smoke workflow
   now performs five consecutive student create/login/dashboard cycles, logs a
   correlation ID for every request, and cleans up only those exact temporary
-  IDs. Local notification tests pass (4 passed). CI is expected to verify the
-  fix and five-run sequence while `COURSES_SERVICE_ENABLED=false` and minimum
-  replicas are 1; cutover remains blocked until that CI job succeeds.
+  IDs. Local notification tests pass (4 passed). A later deployment smoke run
+  confirmed the request no longer waits for the broker; see the follow-up
+  below. Cutover remains blocked and `COURSES_SERVICE_ENABLED` remains false.
+
+### Smoke timeout follow-up
+
+**Date:** 2026-11-04
+
+- The async notification change alone did not prevent the first retry
+  (`41865791129`) from timing out. Its student-create request
+  (`gha-41865791129-1-student-create`) returned HTTP 302 only after the
+  Managed Identity token arrived and Service Bus send completed. The token
+  call occupied about 28 seconds; the app response was logged at
+  16:23:34.678 UTC, after the client's 30-second deadline. That run did not
+  have phase-level database or enqueue timings, so it did not establish why
+  the request thread stayed open despite the executor change.
+- Added correlation-linked timings for request database initialization,
+  student transaction commit, and notification enqueue. PostgreSQL connections
+  now set a correlation-specific `application_name` (truncated to PostgreSQL's
+  63-character limit). The HTTP request timeout remains 30 seconds.
+- With `COURSES_SERVICE_ENABLED=false`, `NOTIFICATIONS_ENABLED=true`, and ACA
+  minimum replicas set to 1, deployment smoke run `41869569980` completed five
+  consecutive create/login/dashboard checks. Create requests completed in
+  2.943, 3.559, 3.035, 2.934, and 2.828 seconds, respectively. All logged
+  `smoke_attempt=1/5` through `5/5 passed`, and the test removed its temporary
+  students. Its request correlation IDs are
+  `gha-41869569980-1-student-create` through
+  `gha-41869569980-5-student-create`.
+- For the first create in that run, DB initialization took 0.134 seconds,
+  commit took 0.794 seconds, and notification enqueue took 0.009 seconds. The
+  first background notification completed 11.575 seconds after it started,
+  after the create response; the remaining four sends completed in 1.25–1.46
+  seconds. This confirms the long identity/broker work is outside the HTTP
+  request in the successful run. Across all five, DB initialization was
+  0.10–0.17 seconds, commits were 0.79–1.55 seconds, and enqueue was at most
+  0.009 seconds.
+- Temporary PostgreSQL diagnostics used a one-second slow-statement threshold
+  and correlated `application_name`. No PostgreSQL log rows appeared in the
+  shared Log Analytics workspace during the run, and no server logs were
+  available for the earlier failures. Application DB timings show database
+  work did not account for the previous 28-second wait; exact failed-run SQL
+  statement breakdowns cannot be recovered retroactively.
+- Container Apps logs for both original failures showed the Gunicorn replica
+  running through each request window. Five warm health checks at min replicas
+  1 returned HTTP 200 in 0.98–1.39 seconds. Min replicas is now restored to 0
+  and the GitHub `COURSES_SERVICE_MIN_REPLICAS` variable is 0. The original
+  failed-run App Service B1 readings remain 77–80% memory, 16–20% CPU during
+  the request minutes, with an HTTP queue of 0; they do not indicate CPU or
+  memory saturation as the cause.
+- Restored PostgreSQL slow-statement logging to `-1`, restored the original
+  log prefix, and removed the temporary diagnostic setting. The courses flag
+  is still false and the smoke request timeout remains 30 seconds.
+- Diagnosis: the earlier 30-second delay was managed-identity token acquisition
+  and Service Bus connection/send work on the notification path, not ACA
+  scale-to-zero, PostgreSQL, or App Service plan saturation. The executor
+  change now has direct live confirmation: broker work completed in the
+  background while all five HTTP requests returned within 3.56 seconds.

@@ -500,3 +500,73 @@ redeploy the previous monolith SHA. The worker deployment restores its previous
 image automatically if its health check fails. Keep the namespace and queue
 during rollback so pending messages remain available; delete them only after
 confirming there are no messages to retain.
+
+## Step 7: Extract courses into Azure Container Apps
+
+**Date:** 2026-11-04
+
+**Status:** Implementation and environment provisioning started; Container App
+deployment and cutover verification are pending.
+
+### What changed
+
+- Created the `sms-courses-aca-env` Container Apps environment in South Africa
+  North using the Consumption workload profile. Zone redundancy is disabled;
+  no VNet was created. The environment sends logs to the dedicated
+  `sms-courses-logs-20261104` Log Analytics workspace with 30-day retention.
+- The courses service runs from the existing public GHCR image. Its container
+  selects `services.courses.app:app` with `APP_MODULE`; the same image retains
+  `app:app` as the App Service default. The monolith and notifier remain on the
+  existing Linux B1 App Service plan.
+- Added an isolated `courses` PostgreSQL schema and `courses_service` login.
+  The service login has table and identity-sequence privileges only in that
+  schema. GitHub Actions Secrets hold the database URL and shared bearer token;
+  the token is also configured as a monolith app setting. The monolith feature
+  flag remains off until final comparison and cutover.
+- The existing PostgreSQL firewall's `AllowAzureServices` rule permits Azure
+  service connections. A temporary single-IP firewall rule was used for
+  database setup and tests, then removed. No temporary firewall rule remains.
+- The initial idempotent copy found 0 legacy courses and 0 legacy enrolments.
+
+### Cost estimate
+
+- A 0.25-vCPU / 0.5-GiB replica scaled to zero has no ACA compute charge while
+  stopped. For continuous active use in South Africa North, current retail
+  rates estimate about **$19.44/month gross** and about **$14.04/month after
+  the unused subscription grants** (180,000 vCPU-seconds and 360,000 GiB-seconds
+  per calendar month). External requests remain free for the first 2 million
+  per month. This excludes Log Analytics ingestion, which depends on log
+  volume; it is not a fixed environment charge.
+- These are public USD retail estimates, not measured Azure for Students
+  credit consumption. The Container App has not yet been deployed, so actual
+  usage is not available.
+
+### Cutover, rollback, and known limitations
+
+- For the final copy and comparison, stop the monolith briefly to freeze course
+  and enrolment writes. Rerun the idempotent migration, run the comparison
+  command and require exit code 0, set `COURSES_SERVICE_ENABLED=true`, then
+  restart the monolith to resume writes through the service.
+- Before the courses service accepts real writes, rollback is safe by setting
+  `COURSES_SERVICE_ENABLED=false`; the legacy tables remain unchanged. After
+  the service accepts real writes, the legacy tables are stale and rollback
+  requires manual reconciliation. There is no reverse-copy path. This is a
+  known limitation.
+- The PostgreSQL `AllowAzureServices` rule is broad and admits Azure-hosted
+  sources. Tighten it with private networking or more specific egress controls
+  if the architecture later permits.
+
+### Verification so far
+
+- `az bicep build --file infra/main.bicep` succeeded.
+- Local `python -m pytest -q`: 22 passed, 1 PostgreSQL-only migration test
+  skipped because the local test process does not use the PostgreSQL CI
+  service.
+- The PostgreSQL migration test passed against the live server using isolated
+  temporary schemas. It verified ID preservation, idempotent rerun, comparison
+  mismatch reporting, a non-zero comparison-script exit on mismatch, and the
+  next course receiving ID 13 after a migrated ID 12.
+- The `courses_service` login connected and read its schema. The source course
+  and enrolment tables had no rows at the initial copy.
+- Docker is unavailable in the local environment; GitHub Actions will perform
+  the monolith and courses entry-point image smoke builds.

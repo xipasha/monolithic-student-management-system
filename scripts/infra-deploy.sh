@@ -34,6 +34,7 @@ fi
 deployment_parameters=(
   --parameters infra/main.bicepparam
     createAppServicePlan=false manageDeploymentIdentity=false managePostgres=false
+    manageServiceBus=true
     deploymentIdentityPrincipalId="$identity_principal_id"
     containerImage="$container_image"
     notifierContainerImage="ghcr.io/xipasha/monolithic-student-management-system-notifier:latest"

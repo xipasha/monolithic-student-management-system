@@ -69,6 +69,9 @@ param notifierContainerImage string = 'ghcr.io/xipasha/monolithic-student-manage
 @description('Whether the monolith should publish events. Keep false until the worker is healthy.')
 param notificationsEnabled bool = false
 
+@description('Manage the Service Bus namespace, queue, and queue-scoped role assignments.')
+param manageServiceBus bool = true
+
 @secure()
 @description('Application signing key. Supply it from a secure environment variable.')
 param secretKey string
@@ -143,7 +146,7 @@ resource notifierWebConfig 'Microsoft.Web/sites/config@2023-12-01' = {
   }
 }
 
-resource serviceBusNamespace 'Microsoft.ServiceBus/namespaces@2021-11-01' = {
+resource serviceBusNamespace 'Microsoft.ServiceBus/namespaces@2021-11-01' = if (manageServiceBus) {
   name: serviceBusNamespaceName
   location: location
   sku: {
@@ -155,7 +158,7 @@ resource serviceBusNamespace 'Microsoft.ServiceBus/namespaces@2021-11-01' = {
   }
 }
 
-resource notificationQueue 'Microsoft.ServiceBus/namespaces/queues@2021-11-01' = {
+resource notificationQueue 'Microsoft.ServiceBus/namespaces/queues@2021-11-01' = if (manageServiceBus) {
   parent: serviceBusNamespace
   name: serviceBusQueueName
   properties: {
@@ -164,7 +167,7 @@ resource notificationQueue 'Microsoft.ServiceBus/namespaces/queues@2021-11-01' =
   }
 }
 
-resource monolithSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource monolithSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageServiceBus) {
   scope: notificationQueue
   name: guid(notificationQueue.id, appName, serviceBusDataSenderRoleId)
   properties: {
@@ -174,7 +177,7 @@ resource monolithSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01'
   }
 }
 
-resource notifierReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource notifierReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (manageServiceBus) {
   scope: notificationQueue
   name: guid(notificationQueue.id, notifierAppName, serviceBusDataReceiverRoleId)
   properties: {

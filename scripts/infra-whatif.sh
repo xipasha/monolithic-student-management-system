@@ -111,7 +111,7 @@ az deployment group what-if \
   --template-file infra/main.bicep \
   --parameters infra/main.bicepparam \
   --parameters createAppServicePlan=false manageDeploymentIdentity=false \
-    managePostgres=false \
+    managePostgres=false manageServiceBus=false \
     deploymentIdentityPrincipalId="$identity_principal_id" \
     containerImage="$container_image" \
     notifierContainerImage="ghcr.io/xipasha/monolithic-student-management-system-notifier:${GITHUB_SHA:-latest}" \

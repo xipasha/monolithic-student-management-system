@@ -591,3 +591,8 @@ student account and automatically restored the previous image.
   writes have been routed through the service. Investigate this timeout before
   retrying the monolith deployment or beginning the approved write-freeze,
   final copy, comparison and cutover.
+- The timed-out student-creation request may have committed before its HTTP
+  response stalled. CI cleanup did not confirm removal, and the workstation
+  cannot connect directly through the PostgreSQL firewall. Check for the
+  verification student identified by run `41853017664` from an Azure-hosted
+  context before the next live smoke attempt.

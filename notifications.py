@@ -8,17 +8,29 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import lru_cache
 
-from azure.identity import DefaultAzureCredential
+from azure.core.pipeline.transport import RequestsTransport
+from azure.identity import DefaultAzureCredential, ManagedIdentityCredential
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 
 logger = logging.getLogger(__name__)
 _notification_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="student-event")
+TOKEN_TIMEOUT_SECONDS = 2
 
 
 @lru_cache(maxsize=1)
 def _credential():
-    """Reuse the managed identity credential and its token cache per worker."""
-    return DefaultAzureCredential()
+    """Reuse a credential with bounded token HTTP and retry timeouts."""
+    transport = RequestsTransport(
+        connection_timeout=TOKEN_TIMEOUT_SECONDS,
+        read_timeout=TOKEN_TIMEOUT_SECONDS,
+    )
+    if os.environ.get("IDENTITY_ENDPOINT"):
+        return ManagedIdentityCredential(transport=transport, retry_total=0)
+    return DefaultAzureCredential(
+        transport=transport,
+        retry_total=0,
+        process_timeout=TOKEN_TIMEOUT_SECONDS,
+    )
 
 
 def _client():
@@ -30,6 +42,8 @@ def _client():
     return ServiceBusClient(
         fully_qualified_namespace=namespace,
         credential=_credential(),
+        retry_total=0,
+        socket_timeout=TOKEN_TIMEOUT_SECONDS,
     ), queue
 
 
@@ -38,7 +52,10 @@ def _send_event(payload, client_factory=None):
     try:
         client, queue = (client_factory or _client)()
         with client:
-            sender = client.get_queue_sender(queue_name=queue)
+            sender = client.get_queue_sender(
+                queue_name=queue,
+                socket_timeout=TOKEN_TIMEOUT_SECONDS,
+            )
             with sender:
                 sender.send_messages(ServiceBusMessage(json.dumps(payload)))
         logger.info(json.dumps({

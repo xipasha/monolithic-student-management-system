@@ -162,16 +162,26 @@ jobs:
             exit 1
           fi
           replica_count=0
+          service_ready=false
           for attempt in $(seq 1 16); do
             replicas_json="$(az containerapp replica list --resource-group "$AZURE_RESOURCE_GROUP" \
               --name "$COURSES_APP" --output json 2>/dev/null || echo '[]')"
             replica_count="$(python -c 'import json,sys; replicas=json.load(sys.stdin); print(sum(1 for replica in replicas if replica.get("properties", {}).get("runningState") == "Running" and any(container.get("ready") for container in replica.get("properties", {}).get("containers", []))))' <<< "$replicas_json")"
             echo "ACA ready replica check ${attempt}/16: $replica_count"
             if [[ "$replica_count" =~ ^[0-9]+$ ]] && [[ "$replica_count" -ge 1 ]]; then break; fi
+            if curl --fail --silent --show-error --max-time 10 "$COURSES_SERVICE_URL/health" >/dev/null && \
+               curl --fail --silent --show-error --max-time 10 \
+                 --header "Authorization: Bearer $COURSES_SERVICE_TOKEN" "$COURSES_SERVICE_URL/ready" >/dev/null; then
+              service_ready=true
+              echo "Courses /health and /ready are both returning HTTP 200."
+              break
+            fi
+            echo "Courses ingress is not ready yet; keeping minReplicas=1 and retrying."
             sleep 30
           done
-          if [[ ! "$replica_count" =~ ^[0-9]+$ ]] || [[ "$replica_count" -lt 1 ]]; then
-            echo "Courses service has no running, ready replica after up to 8 minutes at min=1." >&2
+          if { [[ ! "$replica_count" =~ ^[0-9]+$ ]] || [[ "$replica_count" -lt 1 ]]; } && \
+             [[ "$service_ready" != true ]]; then
+            echo "Courses service has no running, ready replica and health probes did not pass within the readiness window at min=1." >&2
             exit 1
           fi
           echo "ACA capacity: min=1, running replicas=$replica_count; estimated idle cost about $5.83/month gross or $4.21 after unused monthly grants. If continuously active, estimate up to $19.44 gross or $14.04 after grants. Excludes Log Analytics ingestion."

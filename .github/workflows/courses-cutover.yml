@@ -162,14 +162,16 @@ jobs:
             exit 1
           fi
           replica_count=0
-          for attempt in $(seq 1 10); do
-            replica_count="$(az containerapp replica list --resource-group "$AZURE_RESOURCE_GROUP" \
-              --name "$COURSES_APP" --query 'length(@)' --output tsv 2>/dev/null || echo 0)"
+          for attempt in $(seq 1 16); do
+            replicas_json="$(az containerapp replica list --resource-group "$AZURE_RESOURCE_GROUP" \
+              --name "$COURSES_APP" --output json 2>/dev/null || echo '[]')"
+            replica_count="$(python -c 'import json,sys; replicas=json.load(sys.stdin); print(sum(1 for replica in replicas if replica.get("properties", {}).get("runningState") == "Running" and any(container.get("ready") for container in replica.get("properties", {}).get("containers", []))))' <<< "$replicas_json")"
+            echo "ACA ready replica check ${attempt}/16: $replica_count"
             if [[ "$replica_count" =~ ^[0-9]+$ ]] && [[ "$replica_count" -ge 1 ]]; then break; fi
-            sleep 3
+            sleep 30
           done
           if [[ ! "$replica_count" =~ ^[0-9]+$ ]] || [[ "$replica_count" -lt 1 ]]; then
-            echo "Courses service has no running replica at min=1." >&2
+            echo "Courses service has no running, ready replica after up to 8 minutes at min=1." >&2
             exit 1
           fi
           echo "ACA capacity: min=1, running replicas=$replica_count; estimated idle cost about $5.83/month gross or $4.21 after unused monthly grants. If continuously active, estimate up to $19.44 gross or $14.04 after grants. Excludes Log Analytics ingestion."

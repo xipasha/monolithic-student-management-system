@@ -15,7 +15,6 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write
   id-token: write
 
 jobs:
@@ -62,7 +61,6 @@ jobs:
           COURSES_SERVICE_TOKEN: ${{ secrets.COURSES_SERVICE_TOKEN }}
           POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
           COURSES_SERVICE_URL: ${{ vars.COURSES_SERVICE_URL }}
-          GH_TOKEN: ${{ github.token }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
@@ -108,28 +106,21 @@ jobs:
             if [[ "$status" -eq 0 ]]; then
               echo "Cutover stages passed; restoring ACA minimum replicas to 0 through Bicep."
               deploy_courses_bicep 0 || status=$?
-              gh variable set COURSES_SERVICE_MIN_REPLICAS --body 0 || status=$?
             elif [[ "$rollback_window_safe" == true ]]; then
               echo "A failure occurred in the rehearsed safe window; restoring the courses flag to true."
               az webapp config appsettings set --resource-group "$AZURE_RESOURCE_GROUP" \
                 --name "$APP_NAME" --settings COURSES_SERVICE_ENABLED=true --output none
-              gh variable set COURSES_SERVICE_ENABLED --body true || status=$?
               az webapp start --resource-group "$AZURE_RESOURCE_GROUP" --name "$APP_NAME"
               deploy_courses_bicep 0 || status=$?
-              gh variable set COURSES_SERVICE_MIN_REPLICAS --body 0 || status=$?
               flag_enabled=true
             elif [[ "$flag_enabled" != true ]]; then
               echo "Cutover stopped before service writes; keeping the flag off and restoring service availability."
               az webapp config appsettings set --resource-group "$AZURE_RESOURCE_GROUP" \
                 --name "$APP_NAME" --settings COURSES_SERVICE_ENABLED=false --output none
-              gh variable set COURSES_SERVICE_ENABLED --body false || status=$?
               az webapp start --resource-group "$AZURE_RESOURCE_GROUP" --name "$APP_NAME"
               deploy_courses_bicep 0 || status=$?
-              gh variable set COURSES_SERVICE_MIN_REPLICAS --body 0 || status=$?
             else
               echo "Cutover stopped after service writes may have started; preserving the enabled flag and min=1."
-              gh variable set COURSES_SERVICE_ENABLED --body true || status=$?
-              gh variable set COURSES_SERVICE_MIN_REPLICAS --body 1 || status=$?
               az webapp start --resource-group "$AZURE_RESOURCE_GROUP" --name "$APP_NAME"
             fi
             if [[ "$firewall_created" == true ]]; then
@@ -151,7 +142,6 @@ jobs:
             echo "Precondition failed: COURSES_SERVICE_ENABLED must be false, found '$current_flag'." >&2
             exit 1
           fi
-          gh variable set COURSES_SERVICE_ENABLED --body false
           az bicep build --file infra/courses-container-app.bicep --outfile "$RUNNER_TEMP/courses-container-app.json"
           echo "Preflight passed: courses flag is false; monolith remains on the legacy course tables."
 
@@ -171,7 +161,6 @@ jobs:
             echo "Bicep did not set the expected minimum replica count." >&2
             exit 1
           fi
-          gh variable set COURSES_SERVICE_MIN_REPLICAS --body 1
           replica_count=0
           for attempt in $(seq 1 10); do
             replica_count="$(az containerapp replica list --resource-group "$AZURE_RESOURCE_GROUP" \
@@ -298,7 +287,6 @@ jobs:
           az webapp config appsettings set --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$APP_NAME" --settings COURSES_SERVICE_ENABLED=true --output none
           flag_enabled=true
-          gh variable set COURSES_SERVICE_ENABLED --body true
           az webapp start --resource-group "$AZURE_RESOURCE_GROUP" --name "$APP_NAME"
           for attempt in $(seq 1 40); do
             if curl --fail --silent --show-error --max-time 4 "$WEBAPP_URL/health"; then break; fi

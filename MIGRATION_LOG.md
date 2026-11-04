@@ -588,11 +588,14 @@ student account and automatically restored the previous image.
   the temporary student-creation request. The workflow restored the previous
   monolith image (`064ced654ea04a676acc5a4386ddfac20582d96a`) and verified its
   `/health` endpoint. `COURSES_SERVICE_ENABLED` remains `false`; no course
-  writes have been routed through the service. Investigate this timeout before
-  retrying the monolith deployment or beginning the approved write-freeze,
-  final copy, comparison and cutover.
-- The timed-out student-creation request may have committed before its HTTP
-  response stalled. CI cleanup did not confirm removal, and the workstation
-  cannot connect directly through the PostgreSQL firewall. Check for the
-  verification student identified by run `41853017664` from an Azure-hosted
-  context before the next live smoke attempt.
+  writes have been routed through the service.
+- Follow-up database check from the workstation found no student with ID
+  `STEP541853017664`. The check used a temporary single-IP PostgreSQL firewall
+  rule, which was removed; `AllowAzureServices` is again the only rule.
+- The next deployment run (`41855066332`, image SHA
+  `7d29c14631ccac8a73c994b965455e86bd57a634`) passed the complete CI suite and
+  live administrator/student login smoke test. CI removed its temporary test
+  rows. The monolith health endpoint is healthy and the courses feature flag
+  remains `false`. The earlier request timeout did not recur; its cause is
+  unknown. The approved write freeze, final idempotent copy, comparison and
+  cutover can proceed.

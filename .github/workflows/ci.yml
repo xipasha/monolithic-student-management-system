@@ -357,103 +357,117 @@ jobs:
           import psycopg2
           import re
           import secrets
+          import time
           from http.cookiejar import CookieJar
           from urllib.parse import urlencode, urljoin
           from urllib.request import HTTPCookieProcessor, Request, build_opener
 
           base_url = os.environ["WEBAPP_URL"].rstrip("/")
           admin_password = os.environ["ADMIN_PASSWORD"]
-          test_student = f"STEP5{os.environ['TEST_RUN_ID']}"
+          run_id = os.environ["TEST_RUN_ID"]
+          test_students = [f"STEP5{run_id}{attempt}" for attempt in range(1, 6)]
           admin = build_opener(HTTPCookieProcessor(CookieJar()))
-          student = build_opener(HTTPCookieProcessor(CookieJar()))
 
-          def post(opener, path, values):
+          def post(opener, path, values, correlation_id):
               request = Request(
                   urljoin(base_url + "/", path.lstrip("/")),
                   data=urlencode(values).encode(),
-                  headers={"Content-Type": "application/x-www-form-urlencoded"},
+                  headers={
+                      "Content-Type": "application/x-www-form-urlencoded",
+                      "X-Correlation-ID": correlation_id,
+                  },
               )
+              started = time.monotonic()
+              print(f"request_start path={path} correlation_id={correlation_id}", flush=True)
               with opener.open(request, timeout=30) as response:
-                  return response.geturl(), response.read().decode()
-
-          def get(opener, path):
-              with opener.open(urljoin(base_url + "/", path.lstrip("/")), timeout=30) as response:
-                  return response.geturl(), response.read().decode()
+                  body = response.read().decode()
+                  elapsed = time.monotonic() - started
+                  print(
+                      f"request_done path={path} status={response.status} "
+                      f"elapsed_seconds={elapsed:.3f} correlation_id="
+                      f"{response.headers.get('X-Correlation-ID', correlation_id)}",
+                      flush=True,
+                  )
+                  return response.geturl(), body
 
           admin_url, admin_page = post(
-              admin, "/login", {"login_id": "admin", "password": admin_password}
+              admin, "/login", {"login_id": "admin", "password": admin_password},
+              f"gha-{run_id}-admin-login",
           )
           if not admin_url.endswith("/admin") or "Administrator Dashboard" not in admin_page:
               raise SystemExit("Administrator login verification failed.")
 
-          created = False
+          attempted_students = []
           try:
-              credentials_url, credentials_page = post(
-                  admin,
-                  "/admin/students/create",
-                  {
-                      "student_number": test_student,
-                      "first_name": "Step",
-                      "last_name": "Five Verification",
-                      "email": f"{test_student.lower()}@example.invalid",
-                  },
-              )
-              created = True
-              if not credentials_url.endswith("/admin/student-credentials"):
-                  raise SystemExit("Could not create the temporary student verification account.")
-              match = re.search(
-                  r"Temporary password:</strong>\s*<code>([^<]+)</code>",
-                  credentials_page,
-              )
-              if not match:
-                  raise SystemExit("Temporary student password was not returned by the app.")
-              temporary_password = html.unescape(match.group(1))
-
-              change_url, _ = post(
-                  student,
-                  "/login",
-                  {"login_id": test_student, "password": temporary_password},
-              )
-              if not change_url.endswith("/change-password"):
-                  raise SystemExit("Student login verification failed.")
-
-              new_password = secrets.token_urlsafe(18)
-              dashboard_url, dashboard = post(
-                  student,
-                  "/change-password",
-                  {"password": new_password, "confirm_password": new_password},
-              )
-              if not dashboard_url.endswith("/student") or test_student not in dashboard:
-                  raise SystemExit("Student dashboard verification failed.")
-          finally:
-              if created:
-                  admin_page_url, page = get(admin, "/admin")
-                  row = re.search(
-                      rf"<tr>\s*<td>{re.escape(test_student)}</td>.*?"
-                      r'action="/admin/students/(\d+)/toggle"',
-                      page,
-                      re.S,
+              for attempt, test_student in enumerate(test_students, start=1):
+                  attempted_students.append(test_student)
+                  attempt_tag = f"{run_id}-{attempt}"
+                  credentials_url, credentials_page = post(
+                      admin,
+                      "/admin/students/create",
+                      {
+                          "student_number": test_student,
+                          "first_name": "Step",
+                          "last_name": "Five Verification",
+                          "email": f"{test_student.lower()}@example.invalid",
+                      },
+                      f"gha-{attempt_tag}-student-create",
                   )
-                  if row:
-                      post(admin, f"/admin/students/{row.group(1)}/toggle", {})
+                  if not credentials_url.endswith("/admin/student-credentials"):
+                      raise SystemExit(f"Attempt {attempt}: temporary student was not created.")
+                  match = re.search(
+                      r"Temporary password:</strong>\s*<code>([^<]+)</code>",
+                      credentials_page,
+                  )
+                  if not match:
+                      raise SystemExit(f"Attempt {attempt}: temporary password was not returned.")
+                  temporary_password = html.unescape(match.group(1))
+                  student = build_opener(HTTPCookieProcessor(CookieJar()))
 
+                  change_url, _ = post(
+                      student,
+                      "/login",
+                      {"login_id": test_student, "password": temporary_password},
+                      f"gha-{attempt_tag}-student-login",
+                  )
+                  if not change_url.endswith("/change-password"):
+                      raise SystemExit(f"Attempt {attempt}: student login failed.")
+
+                  new_password = secrets.token_urlsafe(18)
+                  dashboard_url, dashboard = post(
+                      student,
+                      "/change-password",
+                      {"password": new_password, "confirm_password": new_password},
+                      f"gha-{attempt_tag}-student-dashboard",
+                  )
+                  if not dashboard_url.endswith("/student") or test_student not in dashboard:
+                      raise SystemExit(f"Attempt {attempt}: student dashboard check failed.")
+                  print(f"smoke_attempt={attempt}/5 passed", flush=True)
+          finally:
               with psycopg2.connect(os.environ["DATABASE_URL"]) as database:
                   with database.cursor() as cursor:
-                      cursor.execute(
-                          "DELETE FROM enrolments WHERE student_id IN "
-                          "(SELECT id FROM students WHERE student_number ~ '^STEP5[0-9]+$')"
-                      )
-                      cursor.execute(
-                          "DELETE FROM students WHERE student_number ~ '^STEP5[0-9]+$'"
-                      )
-                      cursor.execute(
-                          "DELETE FROM users WHERE username ~ '^student_STEP5[0-9]+$'"
-                      )
-                      cursor.execute("SELECT COUNT(*) FROM students")
-                      if cursor.fetchone()[0] != 0:
-                          raise SystemExit("Verification cleanup found unexpected student rows.")
+                      if attempted_students:
+                          cursor.execute(
+                              "DELETE FROM enrolments WHERE student_id IN "
+                              "(SELECT id FROM students WHERE student_number = ANY(%s))",
+                              (attempted_students,),
+                          )
+                          cursor.execute(
+                              "DELETE FROM students WHERE student_number = ANY(%s)",
+                              (attempted_students,),
+                          )
+                          cursor.execute(
+                              "DELETE FROM users WHERE username = ANY(%s)",
+                              ([f"student_{student}" for student in attempted_students],),
+                          )
+                          cursor.execute(
+                              "SELECT COUNT(*) FROM students WHERE student_number = ANY(%s)",
+                              (attempted_students,),
+                          )
+                          if cursor.fetchone()[0] != 0:
+                              raise SystemExit("Verification cleanup left a temporary student row.")
 
-          print("Administrator login/dashboard and student login/dashboard passed; temporary student rows were removed.")
+          print("Five consecutive administrator/student login and dashboard checks passed; their temporary rows were removed.")
           PY
 
       - name: Restore previous runtime and verify health
@@ -607,6 +621,7 @@ jobs:
       AZURE_RESOURCE_GROUP: work
       COURSES_ENVIRONMENT_NAME: sms-courses-aca-env
       COURSES_CONTAINER_APP_NAME: sms-courses-api
+      COURSES_MIN_REPLICAS: ${{ vars.COURSES_SERVICE_MIN_REPLICAS || '0' }}
 
     steps:
       - name: Confirm image is anonymously pullable from GHCR
@@ -629,6 +644,10 @@ jobs:
             echo "Courses service secrets are not configured." >&2
             exit 1
           fi
+          if [[ "$COURSES_MIN_REPLICAS" != "0" && "$COURSES_MIN_REPLICAS" != "1" ]]; then
+            echo "COURSES_SERVICE_MIN_REPLICAS must be 0 or 1." >&2
+            exit 1
+          fi
           if az containerapp show --name "$COURSES_CONTAINER_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" --output none 2>/dev/null; then
             az containerapp secret set --name "$COURSES_CONTAINER_APP_NAME" \
@@ -637,7 +656,7 @@ jobs:
                 "courses-database-url=$COURSES_DATABASE_URL" --output none
             az containerapp update --name "$COURSES_CONTAINER_APP_NAME" \
               --resource-group "$AZURE_RESOURCE_GROUP" --image "$IMAGE" \
-              --min-replicas 0 --max-replicas 3 \
+              --min-replicas "$COURSES_MIN_REPLICAS" --max-replicas 3 \
               --set-env-vars PORT=8000 \
                 APP_MODULE=services.courses.app:app \
                 COURSES_SERVICE_TOKEN=secretref:courses-service-token \
@@ -648,7 +667,7 @@ jobs:
               --environment "$COURSES_ENVIRONMENT_NAME" --image "$IMAGE" \
               --ingress external --target-port 8000 \
               --transport auto --cpu 0.25 --memory 0.5Gi \
-              --min-replicas 0 --max-replicas 3 \
+              --min-replicas "$COURSES_MIN_REPLICAS" --max-replicas 3 \
               --scale-rule-name http-requests --scale-rule-http-concurrency 10 \
               --secrets "courses-service-token=$COURSES_SERVICE_TOKEN" \
                 "courses-database-url=$COURSES_DATABASE_URL" \

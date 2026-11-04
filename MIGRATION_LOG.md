@@ -596,6 +596,49 @@ student account and automatically restored the previous image.
   `7d29c14631ccac8a73c994b965455e86bd57a634`) passed the complete CI suite and
   live administrator/student login smoke test. CI removed its temporary test
   rows. The monolith health endpoint is healthy and the courses feature flag
-  remains `false`. The earlier request timeout did not recur; its cause is
-  unknown. The approved write freeze, final idempotent copy, comparison and
-  cutover can proceed.
+  remained `false`.
+- Diagnosis of failed live smoke runs (`41853017664`, `41858576814`):
+  - App Service startup/container logs show `NOTIFICATIONS_ENABLED=true` and a
+    synchronous Service Bus publish in the `/admin/students/create` request.
+    In run `41858576814`, login returned at 15:35:52 UTC, the admin page at
+    15:35:53, and the managed-identity token request started at 15:35:58.884.
+    The token was not acquired until 15:36:26.780 (27.9 seconds). Service Bus
+    link setup then finished and the create request returned HTTP 302 at
+    15:36:28.006 with correlation ID
+    `74f16929-d4cd-47f8-b9b3-652fd9594287`. The GitHub client had already hit
+    its 30-second timeout. The DB commit occurs before notification publishing
+    in `create_student`; the DB did not consume the observed delay.
+  - In run `41853017664`, the app container was rolled back before the student
+    creation response and its after-request correlation log. The matching
+    Managed Identity token request has client request ID
+    `dee8e3f0-d860-11f1-bf4e-32790b339c95`; no app-level correlation ID for
+    that unfinished request was persisted. Its adjacent successful requests
+    were `/login` `e76923a3-08ec-4e3b-a022-fb3eda53eb94` and `/admin`
+    `41420edb-7711-4685-8ab1-55ee1fdbcd88`.
+  - The Container Apps console logs contain only Gunicorn start/stop records in
+    these windows; the monolith feature flag was false, so no courses API
+    request was made. The replica was active during both failed requests:
+    15:02:28–15:08:29 UTC around run 1, and 15:34:16–15:39:59 UTC around run
+    2. It had scaled to zero before deployment warm-up, but was running by the
+    time the student smoke step started. Scale-to-zero did not cause these
+    timeouts.
+  - PostgreSQL Flexible Server had no downloadable server log files for the
+    period, and `log_min_duration_statement=-1` (slow statement logging off).
+    This prevents a query-level duration breakdown. The application code order
+    and the late identity-token call place the observed delay after DB commit.
+  - App Service B1 plan metrics at the request minutes: run 1 memory 77%, CPU
+    16%, HTTP queue 0; run 2 memory 79%, CPU 18%, HTTP queue 0. The following
+    minute values were 79%/56% and 80%/20%, respectively. This does not indicate
+    plan saturation during the request.
+- Set the courses Container App minimum to 1 for the requested comparison. Five
+  consecutive warm `/health` checks returned HTTP 200 in 0.98–1.39 seconds.
+  The configured minimum is currently 1 for the next smoke run; restore it to
+  0 afterward to return to scale-to-zero and avoid ongoing replica cost.
+- Evidence-based fix: do not wait for Managed Identity or Service Bus inside
+  the student HTTP request. `notifications.py` now queues best-effort sends on
+  a background executor and reuses a credential per worker. The smoke workflow
+  now performs five consecutive student create/login/dashboard cycles, logs a
+  correlation ID for every request, and cleans up only those exact temporary
+  IDs. Local notification tests pass (4 passed). CI is expected to verify the
+  fix and five-run sequence while `COURSES_SERVICE_ENABLED=false` and minimum
+  replicas are 1; cutover remains blocked until that CI job succeeds.

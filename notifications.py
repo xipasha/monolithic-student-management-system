@@ -3,12 +3,21 @@
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from functools import lru_cache
 
 from azure.identity import DefaultAzureCredential
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 
 logger = logging.getLogger(__name__)
+_notification_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="student-event")
+
+
+@lru_cache(maxsize=1)
+def _credential():
+    """Reuse the managed identity credential and its token cache per worker."""
+    return DefaultAzureCredential()
 
 
 def _client():
@@ -19,21 +28,11 @@ def _client():
         raise RuntimeError("SERVICEBUS_NAMESPACE is required when notifications are enabled")
     return ServiceBusClient(
         fully_qualified_namespace=namespace,
-        credential=DefaultAzureCredential(),
+        credential=_credential(),
     ), queue
 
 
-def publish_student_event(event_type, student_number, correlation_id, client_factory=None):
-    """Send a non-sensitive event. Broker failures never fail the student request."""
-    if os.environ.get("NOTIFICATIONS_ENABLED", "false").lower() != "true":
-        return False
-
-    payload = {
-        "event_type": event_type,
-        "student_number": student_number,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "correlation_id": correlation_id,
-    }
+def _send_event(payload, client_factory=None):
     try:
         client, queue = (client_factory or _client)()
         with client:
@@ -45,6 +44,35 @@ def publish_student_event(event_type, student_number, correlation_id, client_fac
         logger.error(
             json.dumps({
                 "event": "notification_publish_failed",
+                "event_type": payload["event_type"],
+                "student_number": payload["student_number"],
+                "correlation_id": payload["correlation_id"],
+                "error": str(exc),
+            })
+        )
+        return False
+
+
+def publish_student_event(event_type, student_number, correlation_id, client_factory=None):
+    """Queue best-effort delivery so identity or broker latency cannot stall a request."""
+    if os.environ.get("NOTIFICATIONS_ENABLED", "false").lower() != "true":
+        return False
+
+    payload = {
+        "event_type": event_type,
+        "student_number": student_number,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "correlation_id": correlation_id,
+    }
+    # Injected factories remain synchronous for deterministic unit tests.
+    if client_factory is not None:
+        return _send_event(payload, client_factory)
+    try:
+        _notification_executor.submit(_send_event, payload)
+    except RuntimeError as exc:
+        logger.error(
+            json.dumps({
+                "event": "notification_queue_failed",
                 "event_type": event_type,
                 "student_number": student_number,
                 "correlation_id": correlation_id,
@@ -52,3 +80,4 @@ def publish_student_event(event_type, student_number, correlation_id, client_fac
             })
         )
         return False
+    return True

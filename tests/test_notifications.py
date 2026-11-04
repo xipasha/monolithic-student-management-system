@@ -1,5 +1,6 @@
 import json
 
+import notifications
 from notifications import publish_student_event
 
 
@@ -62,3 +63,19 @@ def test_publisher_swallows_send_failure(monkeypatch, caplog):
 
     assert not publish_student_event("student_created", "ST10", "cid", fail)
     assert "notification_publish_failed" in caplog.text
+
+
+def test_live_publisher_queues_delivery_without_waiting(monkeypatch):
+    monkeypatch.setenv("NOTIFICATIONS_ENABLED", "true")
+    submitted = []
+
+    class RecordingExecutor:
+        def submit(self, function, *args):
+            submitted.append((function, args))
+
+    monkeypatch.setattr(notifications, "_notification_executor", RecordingExecutor())
+    assert publish_student_event("student_created", "ST11", "correlation-2")
+    assert len(submitted) == 1
+    function, args = submitted.pop()
+    assert args[0]["student_number"] == "ST11"
+    assert args[0]["correlation_id"] == "correlation-2"

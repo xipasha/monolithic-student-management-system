@@ -338,11 +338,15 @@ No Bicep deployment was made to the App Service. The CI-only access grants can
 be removed by deleting their resource-group role assignments and the custom
 role definition if this what-if check is no longer needed.
 
-## Step 5: Prepare PostgreSQL Flexible Server migration
+## Step 5: Migrate application to PostgreSQL Flexible Server
 
-**Date:** 2026-11-03
+**Date:** 2026-11-04
 
-**Status:** Implementation prepared; test, data migration, and production cutover remain pending.
+**Status:** Deployed and verified. The project owner confirmed the original
+SQLite database has no records, so there was no production data to copy.
+
+**Commits:** `4ef8f2d`, `e45928f`, `0ee7912`, `d663c25`, `9bd7835`,
+`a7b4dea`, `37c6a29`, `7bee412`
 
 ### What changed
 
@@ -357,6 +361,13 @@ role definition if this what-if check is no longer needed.
 - Added `scripts/migrate-sqlite-to-postgres.py`, which refuses a nonempty target,
   checks schema columns, copies IDs and rows in foreign-key order, and resets
   serial sequences. Added migration and rollback instructions to the README.
+- Generated the PostgreSQL administrator password and initial application
+  administrator password locally, then stored both and the TLS connection URL
+  as GitHub Actions secrets. No credential values were printed or committed.
+- Provisioned the database before deploying the new app image. The existing
+  SQLite data copy was not run because the owner confirmed that the original
+  database has no records. The deployment workflow created a temporary student
+  for login verification and deactivated it afterward.
 
 ### Risk
 
@@ -370,26 +381,37 @@ back during rollback.
 
 ### Verification
 
-- Azure subscription `Azure for Students` reports the PostgreSQL resource
-  provider as registering. South Africa North lists `Standard_B1ms`; the
-  PostgreSQL quota endpoint reports 0 of 8 Burstable B-family servers and 0 of
-  16 cores in use.
-- `az bicep build` succeeded for `infra/main.bicep` and
-  `infra/what-if-role.bicep`; `az bicep build-params` succeeded with a
-  process-only validation value for the existing required `SECRET_KEY`.
-- `git diff --check` passed.
-- The 14 characterisation tests were not run in this environment: Python,
-  Docker, and Bash are unavailable. CI was not triggered because the local
-  GitHub CLI credentials are invalid.
-- No database was provisioned and no production deployment or login verification
-  was performed. There is no local `instance/sms.db`; the deployed App Service
-  does not have `DATABASE_URL`, and its container-local SQLite data must be
-  copied to a stable file before replacing the running image.
+- Azure subscription `Azure for Students` was enabled for
+  `Microsoft.DBforPostgreSQL`. South Africa North lists `Standard_B1ms`; at
+  provisioning time the quota endpoint reported 0 of 8 Burstable B-family
+  servers and 0 of 16 cores in use.
+- `az bicep build` succeeded for both Bicep templates, and
+  `az bicep build-params` succeeded with process-only validation values.
+- Reviewed what-if deployment `step5-postgres-20261104094625` proposed only the
+  PostgreSQL server, database, TLS and Azure firewall resources, plus the
+  expected App Service setting changes. The deployment succeeded.
+- The server `sms-student-management-pg-20261103` is PostgreSQL 16 and reports
+  `Ready`; the `sms` database exists and `require_secure_transport` is `ON`.
+- GitHub Actions run
+  [41797417187](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41797417187)
+  passed secret scanning, all 14 existing characterisation tests against both
+  SQLite and PostgreSQL, coverage, container build and smoke test, GHCR image
+  publication, live Bicep what-if, deployment, health check, and live login
+  verification.
+- The live `/health` endpoint returned HTTP 200 with
+  `{"application":"Student Management System","status":"ok"}`. The workflow
+  verified the admin login and dashboard, created a temporary student, verified
+  first login, password change, and the student dashboard, then deactivated
+  that verification account.
+- The live App Service runs image
+  `ghcr.io/xipasha/monolithic-student-management-system:7bee412d98ad88954e670044ccfb8583750faabc`.
+- `git diff --check` passed. The original SQLite migration script was not run
+  because the owner confirmed that the source database was empty.
 
 ### Rollback
 
-Before cutover, retain the source SQLite file unchanged. To return the app to
-SQLite, point `DATABASE_URL` at the retained SQLite file (or unset it to use
-the default `instance/sms.db` path) and redeploy/restart the prior container. This
-restores only the SQLite copy; PostgreSQL writes made after cutover require a
-separate export or reconciliation before rollback.
+To return the app to SQLite, point `DATABASE_URL` at a retained SQLite file
+(or unset it to use the default `instance/sms.db` path), then redeploy/restart a
+SQLite-capable image. The original database was empty. Any records created in
+PostgreSQL after this deployment are not copied back and must be exported or
+reconciled before rollback. The container's SQLite directory is not persisted.

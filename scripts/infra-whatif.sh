@@ -58,9 +58,12 @@ expected = {
     "WEBSITES_PORT": "8000",
     "PORT": "8000",
     "SECRET_KEY": os.environ["SECRET_KEY"],
+    "ADMIN_USERNAME": os.environ.get("ADMIN_USERNAME", "admin"),
 }
 if os.environ.get("DATABASE_URL"):
     expected["DATABASE_URL"] = os.environ["DATABASE_URL"]
+if os.environ.get("ADMIN_PASSWORD"):
+    expected["ADMIN_PASSWORD"] = os.environ["ADMIN_PASSWORD"]
 actual = {item["name"]: item["value"] for item in json.loads(os.environ["APP_SETTINGS_JSON"])}
 missing = expected.keys() - actual.keys()
 extra = actual.keys() - expected.keys()

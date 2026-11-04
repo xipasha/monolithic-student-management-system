@@ -10,3 +10,4 @@ param containerImage = 'ghcr.io/xipasha/monolithic-student-management-system:3de
 param secretKey = readEnvironmentVariable('SECRET_KEY')
 param postgresAdminPassword = readEnvironmentVariable('POSTGRES_ADMIN_PASSWORD', '')
 param databaseUrl = readEnvironmentVariable('DATABASE_URL', '')
+param adminPassword = readEnvironmentVariable('ADMIN_PASSWORD', '')

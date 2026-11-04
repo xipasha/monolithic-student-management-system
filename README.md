@@ -37,6 +37,11 @@ named `SECRET_KEY` in **Settings → Secrets and variables → Actions**. Use th
 same value as the deployed app, obtained from your approved secret manager.
 Do not paste the value into chat, a command line, or the repository.
 
+For the PostgreSQL rollout, also add `POSTGRES_ADMIN_PASSWORD`, `DATABASE_URL`,
+and `ADMIN_PASSWORD` as Actions secrets. The app's initial admin username is
+`admin`. The connection URL must include `sslmode=require`; never print it or
+commit it.
+
 ### Deploying to a new resource group
 
 Use an account permitted to create subscription role definitions and resource

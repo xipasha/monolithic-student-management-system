@@ -26,6 +26,13 @@ param postgresAdminPassword string
 @description('PostgreSQL connection URL (including sslmode=require), supplied from a secure environment variable.')
 param databaseUrl string
 
+@description('Initial application administrator username.')
+param adminUsername string = 'admin'
+
+@secure()
+@description('Initial application administrator password, supplied from a secure environment variable.')
+param adminPassword string
+
 @description('Set false for the existing-app CI what-if check.')
 param managePostgres bool = true
 
@@ -161,6 +168,8 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     PORT: '8000'
     SECRET_KEY: secretKey
     DATABASE_URL: databaseUrl
+    ADMIN_USERNAME: adminUsername
+    ADMIN_PASSWORD: adminPassword
   }
 }
 

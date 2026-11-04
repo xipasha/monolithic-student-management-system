@@ -245,6 +245,101 @@ jobs:
           fi
           exit 1
 
+      - name: Verify live administrator and student logins
+        if: steps.health.outcome == 'success' && inputs.simulate_failure != true
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          WEBAPP_URL: https://sms-student-management-20261103.azurewebsites.net
+          TEST_RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import html
+          import os
+          import re
+          import secrets
+          from http.cookiejar import CookieJar
+          from urllib.parse import urlencode, urljoin
+          from urllib.request import HTTPCookieProcessor, Request, build_opener
+
+          base_url = os.environ["WEBAPP_URL"].rstrip("/")
+          admin_password = os.environ["ADMIN_PASSWORD"]
+          test_student = f"STEP5{os.environ['TEST_RUN_ID']}"
+          admin = build_opener(HTTPCookieProcessor(CookieJar()))
+          student = build_opener(HTTPCookieProcessor(CookieJar()))
+
+          def post(opener, path, values):
+              request = Request(
+                  urljoin(base_url + "/", path.lstrip("/")),
+                  data=urlencode(values).encode(),
+                  headers={"Content-Type": "application/x-www-form-urlencoded"},
+              )
+              with opener.open(request, timeout=30) as response:
+                  return response.geturl(), response.read().decode()
+
+          def get(opener, path):
+              with opener.open(urljoin(base_url + "/", path.lstrip("/")), timeout=30) as response:
+                  return response.geturl(), response.read().decode()
+
+          admin_url, admin_page = post(
+              admin, "/login", {"login_id": "admin", "password": admin_password}
+          )
+          if not admin_url.endswith("/admin") or "Administrator Dashboard" not in admin_page:
+              raise SystemExit("Administrator login verification failed.")
+
+          created = False
+          try:
+              credentials_url, credentials_page = post(
+                  admin,
+                  "/admin/students/create",
+                  {
+                      "student_number": test_student,
+                      "first_name": "Step",
+                      "last_name": "Five Verification",
+                      "email": f"{test_student.lower()}@example.invalid",
+                  },
+              )
+              created = True
+              if not credentials_url.endswith("/admin/student-credentials"):
+                  raise SystemExit("Could not create the temporary student verification account.")
+              match = re.search(
+                  r"Temporary password:</strong>\s*<code>([^<]+)</code>",
+                  credentials_page,
+              )
+              if not match:
+                  raise SystemExit("Temporary student password was not returned by the app.")
+              temporary_password = html.unescape(match.group(1))
+
+              change_url, _ = post(
+                  student,
+                  "/login",
+                  {"login_id": test_student, "password": temporary_password},
+              )
+              if not change_url.endswith("/change-password"):
+                  raise SystemExit("Student login verification failed.")
+
+              new_password = secrets.token_urlsafe(18)
+              dashboard_url, dashboard = post(
+                  student,
+                  "/change-password",
+                  {"password": new_password, "confirm_password": new_password},
+              )
+              if not dashboard_url.endswith("/student") or test_student not in dashboard:
+                  raise SystemExit("Student dashboard verification failed.")
+          finally:
+              if created:
+                  admin_page_url, page = get(admin, "/admin")
+                  row = re.search(
+                      rf"<tr>\s*<td>{re.escape(test_student)}</td>.*?"
+                      r'action="/admin/students/(\d+)/toggle"',
+                      page,
+                      re.S,
+                  )
+                  if row:
+                      post(admin, f"/admin/students/{row.group(1)}/toggle", {})
+
+          print("Administrator login/dashboard and student login/dashboard passed; the test student was deactivated.")
+          PY
+
       - name: Restore previous runtime and verify health
         if: always() && steps.previous.outcome == 'success' && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success')
         continue-on-error: true

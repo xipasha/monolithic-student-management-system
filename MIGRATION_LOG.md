@@ -432,8 +432,7 @@ reconciled before rollback. The container's SQLite directory is not persisted.
 
 **Date:** 2026-11-04
 
-**Status:** Service Bus and worker infrastructure provisioned; application and
-worker image deployment is pending the Step 6 CI run.
+**Status:** Deployed and verified.
 
 ### What changed
 
@@ -477,11 +476,22 @@ worker image deployment is pending the Step 6 CI run.
   assigned at the queue scope.
 - Bicep and parameter file builds succeeded before provisioning. Azure
   deployment `step6-infrastructure-20261104114651` completed successfully.
-- The live monolith setting is `NOTIFICATIONS_ENABLED=False` until the worker
-  is deployed and health-checked by CI.
+- The CI what-if check skips Service Bus writes because the OIDC deploy identity
+  deliberately has no Service Bus or role-assignment write access. The
+  namespace, queue, and identities are provisioned separately through the
+  validated `scripts/infra-deploy.sh` CLI deployment.
 - `python -m pytest -q` passed all 19 tests, including the original 14
   characterization tests unchanged. `git diff --check` passed.
-- Step 6 CI publication and deployment are pending.
+- GitHub Actions run
+  [41828321440](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41828321440)
+  passed both database test matrices, secret scan, both container smoke tests,
+  full-SHA GHCR publication, live Bicep what-if, monolith health and login
+  verification, worker deployment and health check, and final notification
+  enablement.
+- Both live `/health` endpoints returned HTTP 200. The monolith and worker run
+  their respective GHCR images tagged
+  `a0967d08cd871969dfd8b7eb8dbf11112cdcf582`; Azure reports
+  `NOTIFICATIONS_ENABLED=true` after the worker passed health verification.
 
 ### Rollback
 

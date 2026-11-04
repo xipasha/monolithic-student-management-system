@@ -101,12 +101,41 @@ jobs:
           docker rm --force student-management-system-smoke
           exit 1
 
+  notifier-container-build-smoke:
+    runs-on: ubuntu-latest
+    needs: tests
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Build worker container image
+        run: docker build --pull -f services/notifier/Dockerfile -t student-management-notifier:${{ github.sha }} .
+
+      - name: Start worker and verify health endpoint
+        run: |
+          docker run --detach --name student-management-notifier-smoke \
+            --publish 8001:8000 \
+            student-management-notifier:${{ github.sha }}
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8001/health; then
+              docker rm --force student-management-notifier-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs student-management-notifier-smoke
+          docker rm --force student-management-notifier-smoke
+          exit 1
+
   publish-image:
     if: |
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    needs: [tests, container-build-smoke]
+    needs: [tests, container-build-smoke, notifier-container-build-smoke]
     permissions:
       contents: read
       packages: write
@@ -129,12 +158,20 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
 
+      - name: Build and push notifications worker image tagged with commit SHA
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/notifier/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository }}-notifier:${{ github.sha }}
+
   deploy-app-service:
     if: |
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    needs: [tests, container-build-smoke, publish-image]
+    needs: [tests, container-build-smoke, notifier-container-build-smoke, publish-image]
     concurrency:
       group: sms-app-service-deployment
       cancel-in-progress: false
@@ -147,6 +184,9 @@ jobs:
       AZURE_SUBSCRIPTION_ID: 74577974-a069-4c7e-90ea-9f06a0aaa0f5
       AZURE_RESOURCE_GROUP: work
       AZURE_WEBAPP_NAME: sms-student-management-20261103
+      AZURE_NOTIFIER_WEBAPP_NAME: sms-student-management-20261103-notifier
+      AZURE_SERVICEBUS_NAMESPACE_NAME: sms-student-events-20261104
+      AZURE_SERVICEBUS_NAMESPACE_FQDN: sms-student-events-20261104.servicebus.windows.net
       AZURE_APPSERVICE_PLAN_NAME: sikalumbit30_asp_8006
       AZURE_IDENTITY_NAME: sms-github-deploy
 
@@ -398,3 +438,98 @@ jobs:
       - name: Fail deployment after unsuccessful update or rollback
         if: always() && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success' || steps.verify-logins.outcome == 'failure')
         run: exit 1
+
+  deploy-notifier:
+    if: |
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    needs: [deploy-app-service, publish-image]
+    concurrency:
+      group: sms-app-service-deployment
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: dfd6e7ba-fca0-482a-a91c-fa4b3143446d
+      AZURE_TENANT_ID: 816691e0-63cf-49e9-be3f-b237b7e2f6ca
+      AZURE_SUBSCRIPTION_ID: 74577974-a069-4c7e-90ea-9f06a0aaa0f5
+      AZURE_RESOURCE_GROUP: work
+      AZURE_WEBAPP_NAME: sms-student-management-20261103
+      AZURE_NOTIFIER_WEBAPP_NAME: sms-student-management-20261103-notifier
+      AZURE_SERVICEBUS_NAMESPACE_FQDN: sms-student-events-20261104.servicebus.windows.net
+
+    steps:
+      - name: Confirm worker image is anonymously pullable
+        run: docker pull "ghcr.io/xipasha/monolithic-student-management-system-notifier:${{ github.sha }}"
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy worker, health check and restore previous image on failure
+        env:
+          IMAGE: ghcr.io/xipasha/monolithic-student-management-system-notifier:${{ github.sha }}
+        run: |
+          previous_runtime="$(az webapp config show \
+            --name "$AZURE_NOTIFIER_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query linuxFxVersion --output tsv)"
+          if [[ -z "$previous_runtime" || "$previous_runtime" == "None" ]]; then
+            echo "Could not determine the previous worker image." >&2
+            exit 1
+          fi
+
+          az webapp config container set \
+            --name "$AZURE_NOTIFIER_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --container-image-name "$IMAGE" --container-registry-url https://ghcr.io --output none
+          az webapp config appsettings set \
+            --name "$AZURE_NOTIFIER_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --settings WEBSITES_PORT=8000 PORT=8000 --output none
+
+          healthy=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 4 \
+              "https://${AZURE_NOTIFIER_WEBAPP_NAME}.azurewebsites.net/health"; then
+              healthy=true
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "$healthy" != "true" ]]; then
+            echo "Worker health check failed; restoring $previous_runtime." >&2
+            az webapp config set --name "$AZURE_NOTIFIER_WEBAPP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" --linux-fx-version "$previous_runtime" --output none
+            for attempt in $(seq 1 30); do
+              if curl --fail --silent --show-error --max-time 4 \
+                "https://${AZURE_NOTIFIER_WEBAPP_NAME}.azurewebsites.net/health"; then
+                echo "Previous worker is healthy again."
+                exit 1
+              fi
+              sleep 2
+            done
+            echo "Worker rollback failed its health check." >&2
+            exit 1
+          fi
+
+      - name: Enable notifications after worker health succeeds
+        run: |
+          az webapp config appsettings set \
+            --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --settings NOTIFICATIONS_ENABLED=true --output none
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 4 \
+              "https://${AZURE_WEBAPP_NAME}.azurewebsites.net/health"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          az webapp config appsettings set \
+            --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --settings NOTIFICATIONS_ENABLED=false --output none
+          echo "Monolith health check failed after enabling; notifications were disabled again." >&2
+          exit 1

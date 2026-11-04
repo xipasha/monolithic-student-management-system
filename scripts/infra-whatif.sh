@@ -5,6 +5,8 @@ set -euo pipefail
 
 resource_group="${AZURE_RESOURCE_GROUP:-work}"
 webapp_name="${AZURE_WEBAPP_NAME:-sms-student-management-20261103}"
+notifier_name="${AZURE_NOTIFIER_WEBAPP_NAME:-${webapp_name}-notifier}"
+service_bus_namespace="${AZURE_SERVICEBUS_NAMESPACE_NAME:-sms-student-events-20261104}"
 plan_name="${AZURE_APPSERVICE_PLAN_NAME:-sikalumbit30_asp_8006}"
 identity_name="${AZURE_IDENTITY_NAME:-sms-github-deploy}"
 image_prefix="DOCKER|ghcr.io/xipasha/monolithic-student-management-system:"
@@ -44,8 +46,10 @@ live_settings="$(az webapp config appsettings list \
   --name "$webapp_name" \
   --resource-group "$resource_group" \
   --output json)"
+notifications_enabled="$(APP_SETTINGS_JSON="$live_settings" python -c 'import json,os; settings={item["name"]:item["value"] for item in json.loads(os.environ["APP_SETTINGS_JSON"])}; print(settings.get("NOTIFICATIONS_ENABLED", "false").lower())')"
 APP_SETTINGS_JSON="$live_settings" WEBAPP_STATE_JSON="$webapp_state" \
-  CURRENT_RUNTIME="$current_runtime" WEBAPP_NAME="$webapp_name" python - <<'PY'
+  CURRENT_RUNTIME="$current_runtime" WEBAPP_NAME="$webapp_name" \
+  NOTIFICATIONS_ENABLED="$notifications_enabled" python - <<'PY'
 import json
 import os
 import sys
@@ -59,6 +63,9 @@ expected = {
     "PORT": "8000",
     "SECRET_KEY": os.environ["SECRET_KEY"],
     "ADMIN_USERNAME": os.environ.get("ADMIN_USERNAME", "admin"),
+    "NOTIFICATIONS_ENABLED": os.environ["NOTIFICATIONS_ENABLED"],
+    "SERVICEBUS_NAMESPACE": os.environ.get("AZURE_SERVICEBUS_NAMESPACE_FQDN", "sms-student-events-20261104.servicebus.windows.net"),
+    "SERVICEBUS_QUEUE": "student-notifications",
 }
 if os.environ.get("DATABASE_URL"):
     expected["DATABASE_URL"] = os.environ["DATABASE_URL"]
@@ -68,6 +75,9 @@ actual = {item["name"]: item["value"] for item in json.loads(os.environ["APP_SET
 missing = expected.keys() - actual.keys()
 extra = actual.keys() - expected.keys()
 mismatched = {name for name in expected.keys() & actual.keys() if actual[name] != expected[name]}
+mismatched.discard("NOTIFICATIONS_ENABLED")
+if "NOTIFICATIONS_ENABLED" in expected and actual.get("NOTIFICATIONS_ENABLED", "").lower() != expected["NOTIFICATIONS_ENABLED"].lower():
+    mismatched.add("NOTIFICATIONS_ENABLED")
 if missing or extra or mismatched:
     print(
         "App Service setting names or values differ (values are hidden): "
@@ -104,11 +114,15 @@ az deployment group what-if \
     managePostgres=false \
     deploymentIdentityPrincipalId="$identity_principal_id" \
     containerImage="$container_image" \
+    notifierContainerImage="ghcr.io/xipasha/monolithic-student-management-system-notifier:${GITHUB_SHA:-latest}" \
+    serviceBusNamespaceName="$service_bus_namespace" \
+    notifierAppName="$notifier_name" \
+    notificationsEnabled="$notifications_enabled" \
   --result-format FullResourcePayloads \
   --no-pretty-print \
   --output json > "$what_if_file"
 
-WEBAPP_NAME="$webapp_name" python - "$what_if_file" <<'PY'
+WEBAPP_NAME="$webapp_name" NOTIFIER_NAME="$notifier_name" SERVICEBUS_NAMESPACE="$service_bus_namespace" python - "$what_if_file" <<'PY'
 import json
 import os
 import sys
@@ -121,6 +135,8 @@ if start < 0:
 changes = json.loads(text[start:])["changes"]
 unexpected = []
 webapp_name = os.environ["WEBAPP_NAME"].lower()
+notifier_name = os.environ["NOTIFIER_NAME"].lower()
+service_bus_namespace = os.environ["SERVICEBUS_NAMESPACE"].lower()
 for change in changes:
     kind = change["changeType"]
     resource_id = change["resourceId"]
@@ -130,6 +146,15 @@ for change in changes:
     if kind == "Modify" and normalized_id.endswith(f"/sites/{webapp_name}/config/appsettings"):
         continue
     if kind == "Modify" and normalized_id.endswith(f"/sites/{webapp_name}"):
+        continue
+    if kind == "Create" and (
+        f"/sites/{notifier_name}" in normalized_id
+        or f"/namespaces/{service_bus_namespace}" in normalized_id
+    ):
+        continue
+    if kind == "Modify" and normalized_id.endswith(f"/sites/{notifier_name}"):
+        continue
+    if kind == "Modify" and normalized_id.endswith(f"/sites/{notifier_name}/config/appsettings"):
         continue
     unexpected.append(f"{kind} {resource_id}")
 

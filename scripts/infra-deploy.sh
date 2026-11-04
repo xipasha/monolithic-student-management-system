@@ -14,6 +14,7 @@ SECRET_KEY="${SECRET_KEY:-$(read_setting SECRET_KEY)}"
 DATABASE_URL="${DATABASE_URL:-$(read_setting DATABASE_URL)}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(read_setting ADMIN_PASSWORD)}"
 POSTGRES_ADMIN_PASSWORD="${POSTGRES_ADMIN_PASSWORD:-$(python -c 'import secrets; print(secrets.token_urlsafe(32))')}"
+export SECRET_KEY DATABASE_URL ADMIN_PASSWORD POSTGRES_ADMIN_PASSWORD
 for required_name in SECRET_KEY DATABASE_URL ADMIN_PASSWORD POSTGRES_ADMIN_PASSWORD; do
   if [[ -z "${!required_name}" || "${!required_name}" == "None" ]]; then
     echo "Could not retrieve the existing $required_name setting; set it in the environment." >&2

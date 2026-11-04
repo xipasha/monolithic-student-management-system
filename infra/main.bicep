@@ -54,6 +54,21 @@ param websiteContributorAssignmentName string
 @description('Published GHCR image name and full commit-SHA tag.')
 param containerImage string
 
+@description('Globally unique Azure Service Bus namespace name.')
+param serviceBusNamespaceName string = 'sms-student-events-20261104'
+
+@description('Service Bus queue for student lifecycle notifications.')
+param serviceBusQueueName string = 'student-notifications'
+
+@description('Globally unique Linux App Service name for the notifications worker.')
+param notifierAppName string = '${appName}-notifier'
+
+@description('Worker image name and commit-SHA tag.')
+param notifierContainerImage string = 'ghcr.io/xipasha/monolithic-student-management-system-notifier:latest'
+
+@description('Whether the monolith should publish events. Keep false until the worker is healthy.')
+param notificationsEnabled bool = false
+
 @secure()
 @description('Application signing key. Supply it from a secure environment variable.')
 param secretKey string
@@ -61,6 +76,8 @@ param secretKey string
 var readerRoleId = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'
 var whatIfRoleId = '3db1392d-2f72-47f3-9453-6860731aa1f0'
 var websiteContributorRoleId = 'de139f84-1756-47ae-9be6-808fbbe84772'
+var serviceBusDataSenderRoleId = '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39'
+var serviceBusDataReceiverRoleId = '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0'
 var effectivePrincipalId = empty(deploymentIdentityPrincipalId) ? deploymentIdentity!.properties.principalId : deploymentIdentityPrincipalId
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = if (createAppServicePlan) {
@@ -83,6 +100,9 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   name: appName
   location: location
   kind: 'app,linux,container'
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     serverFarmId: resourceId('Microsoft.Web/serverfarms', appServicePlanName)
     httpsOnly: true
@@ -93,6 +113,75 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   dependsOn: createAppServicePlan ? [
     appServicePlan
   ] : []
+}
+
+resource notifierWebApp 'Microsoft.Web/sites@2023-12-01' = {
+  name: notifierAppName
+  location: location
+  kind: 'app,linux,container'
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    serverFarmId: resourceId('Microsoft.Web/serverfarms', appServicePlanName)
+    httpsOnly: true
+    siteConfig: {
+      linuxFxVersion: 'DOCKER|${notifierContainerImage}'
+      alwaysOn: true
+    }
+  }
+  dependsOn: createAppServicePlan ? [
+    appServicePlan
+  ] : []
+}
+
+resource notifierWebConfig 'Microsoft.Web/sites/config@2023-12-01' = {
+  parent: notifierWebApp
+  name: 'web'
+  properties: {
+    healthCheckPath: '/health'
+  }
+}
+
+resource serviceBusNamespace 'Microsoft.ServiceBus/namespaces@2021-11-01' = {
+  name: serviceBusNamespaceName
+  location: location
+  sku: {
+    name: 'Basic'
+    tier: 'Basic'
+  }
+  properties: {
+    disableLocalAuth: true
+  }
+}
+
+resource notificationQueue 'Microsoft.ServiceBus/namespaces/queues@2021-11-01' = {
+  parent: serviceBusNamespace
+  name: serviceBusQueueName
+  properties: {
+    maxDeliveryCount: 5
+    deadLetteringOnMessageExpiration: true
+  }
+}
+
+resource monolithSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: notificationQueue
+  name: guid(notificationQueue.id, appName, serviceBusDataSenderRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', serviceBusDataSenderRoleId)
+    principalId: webApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource notifierReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: notificationQueue
+  name: guid(notificationQueue.id, notifierAppName, serviceBusDataReceiverRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', serviceBusDataReceiverRoleId)
+    principalId: notifierWebApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
 }
 
 resource webConfig 'Microsoft.Web/sites/config@2023-12-01' = {
@@ -170,6 +259,22 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     DATABASE_URL: databaseUrl
     ADMIN_USERNAME: adminUsername
     ADMIN_PASSWORD: adminPassword
+    NOTIFICATIONS_ENABLED: string(notificationsEnabled)
+    SERVICEBUS_NAMESPACE: '${serviceBusNamespaceName}.servicebus.windows.net'
+    SERVICEBUS_QUEUE: serviceBusQueueName
+  }
+}
+
+resource notifierAppSettings 'Microsoft.Web/sites/config@2023-12-01' = {
+  parent: notifierWebApp
+  name: 'appsettings'
+  properties: {
+    DOCKER_REGISTRY_SERVER_URL: 'https://ghcr.io'
+    WEBSITES_ENABLE_APP_SERVICE_STORAGE: 'false'
+    WEBSITES_PORT: '8000'
+    PORT: '8000'
+    SERVICEBUS_NAMESPACE: '${serviceBusNamespaceName}.servicebus.windows.net'
+    SERVICEBUS_QUEUE: serviceBusQueueName
   }
 }
 

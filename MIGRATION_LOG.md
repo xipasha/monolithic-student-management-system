@@ -427,3 +427,66 @@ To return the app to SQLite, point `DATABASE_URL` at a retained SQLite file
 SQLite-capable image. The original database was empty. Any records created in
 PostgreSQL after this deployment are not copied back and must be exported or
 reconciled before rollback. The container's SQLite directory is not persisted.
+
+## Step 6: Extract notifications into a Service Bus worker
+
+**Date:** 2026-11-04
+
+**Status:** Service Bus and worker infrastructure provisioned; application and
+worker image deployment is pending the Step 6 CI run.
+
+### What changed
+
+- Added an Azure Service Bus Basic namespace and `student-notifications` queue.
+  Local SAS authentication is disabled. The monolith and worker use separate
+  system-assigned identities with Data Sender and Data Receiver roles scoped
+  only to that queue.
+- Added a Linux worker web app on the existing App Service plan and a separate
+  Docker image. Its consumer logs student lifecycle messages as JSON, simulates
+  notification delivery, completes successful deliveries, and abandons failed
+  deliveries for retry. The queue dead-letters after five deliveries.
+- Added best-effort publisher events for student creation, password reset, and
+  activation/deactivation. Payloads include event type, student number, UTC
+  timestamp, and correlation ID; they never include credentials. Publishing is
+  disabled by default and failures do not affect student routes.
+- Added per-request correlation IDs, reusing a valid incoming
+  `X-Correlation-ID`, and structured request logs.
+- Added publisher and worker unit tests, worker image smoke build, GHCR full-SHA
+  publication, and an OIDC worker deploy with health verification and rollback.
+  The workflow deploys the monolith with notifications disabled, deploys the
+  worker, then enables notifications after the worker health check succeeds.
+
+### Risks
+
+- A Service Bus outage can delay delivery. Publisher failures are logged and
+  swallowed, so those events can be lost while the app request still succeeds.
+- Delivery is at least once; a worker interruption after handling but before
+  completing can cause duplicate notifications. The demo worker has no
+  deduplication because delivery is simulated.
+- Failed messages are retried up to five deliveries and then dead-lettered;
+  operators must inspect and replay dead-lettered messages if needed.
+
+### Verification
+
+- `Microsoft.ServiceBus` is registered. South Africa North is supported; the
+  namespace name `sms-student-events-20261104` was available, and the
+  subscription currently has no other Service Bus namespaces.
+- Azure reports the namespace as Basic in South Africa North with local
+  authentication disabled. The queue reports `maxDeliveryCount=5` and
+  dead-lettering on message expiration. Azure confirms both data roles are
+  assigned at the queue scope.
+- Bicep and parameter file builds succeeded before provisioning. Azure
+  deployment `step6-infrastructure-20261104114651` completed successfully.
+- The live monolith setting is `NOTIFICATIONS_ENABLED=False` until the worker
+  is deployed and health-checked by CI.
+- `python -m pytest -q` passed all 19 tests, including the original 14
+  characterization tests unchanged. `git diff --check` passed.
+- Step 6 CI publication and deployment are pending.
+
+### Rollback
+
+Set `NOTIFICATIONS_ENABLED=false` on the monolith to stop publishing, then
+redeploy the previous monolith SHA. The worker deployment restores its previous
+image automatically if its health check fails. Keep the namespace and queue
+during rollback so pending messages remain available; delete them only after
+confirming there are no messages to retain.

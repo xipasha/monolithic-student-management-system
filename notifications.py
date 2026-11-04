@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -33,12 +34,19 @@ def _client():
 
 
 def _send_event(payload, client_factory=None):
+    started = time.monotonic()
     try:
         client, queue = (client_factory or _client)()
         with client:
             sender = client.get_queue_sender(queue_name=queue)
             with sender:
                 sender.send_messages(ServiceBusMessage(json.dumps(payload)))
+        logger.info(json.dumps({
+            "event": "notification_publish_complete",
+            "event_type": payload["event_type"],
+            "correlation_id": payload["correlation_id"],
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+        }))
         return True
     except Exception as exc:  # Notification outages must not change route results.
         logger.error(
@@ -48,6 +56,7 @@ def _send_event(payload, client_factory=None):
                 "student_number": payload["student_number"],
                 "correlation_id": payload["correlation_id"],
                 "error": str(exc),
+                "elapsed_seconds": round(time.monotonic() - started, 3),
             })
         )
         return False
@@ -67,6 +76,7 @@ def publish_student_event(event_type, student_number, correlation_id, client_fac
     # Injected factories remain synchronous for deterministic unit tests.
     if client_factory is not None:
         return _send_event(payload, client_factory)
+    started = time.monotonic()
     try:
         _notification_executor.submit(_send_event, payload)
     except RuntimeError as exc:
@@ -80,4 +90,10 @@ def publish_student_event(event_type, student_number, correlation_id, client_fac
             })
         )
         return False
+    logger.info(json.dumps({
+        "event": "notification_queued",
+        "event_type": event_type,
+        "correlation_id": correlation_id,
+        "enqueue_elapsed_seconds": round(time.monotonic() - started, 3),
+    }))
     return True

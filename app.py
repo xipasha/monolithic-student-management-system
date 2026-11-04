@@ -3,6 +3,7 @@ import secrets
 import sqlite3
 import json
 import logging
+import time
 import uuid
 from functools import wraps
 from pathlib import Path
@@ -100,7 +101,10 @@ def get_db():
     if "db" not in g:
         database_url = os.environ.get("DATABASE_URL")
         if database_url and database_url.startswith(("postgres://", "postgresql://")):
-            g.db = PostgresConnection(psycopg2.connect(database_url))
+            g.db = PostgresConnection(psycopg2.connect(
+                database_url,
+                application_name=f"sms-{getattr(g, 'correlation_id', 'unknown')}"[:63],
+            ))
         else:
             if database_url:
                 if not database_url.startswith("sqlite:///"):
@@ -268,15 +272,21 @@ def init_db():
 
 
 @app.before_request
-def initialise_database():
-    init_db()
-
-
-@app.before_request
 def assign_correlation_id():
     incoming = request.headers.get("X-Correlation-ID", "").strip()
     allowed = all(char.isalnum() or char in "-_.:" for char in incoming)
     g.correlation_id = incoming[:128] if incoming and allowed else str(uuid.uuid4())
+
+
+@app.before_request
+def initialise_database():
+    started = time.monotonic()
+    init_db()
+    logging.getLogger("student_management").info(json.dumps({
+        "event": "request_database_initialization_complete",
+        "correlation_id": g.correlation_id,
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+    }))
 
 
 @app.after_request
@@ -431,6 +441,7 @@ def admin_dashboard():
 @app.post("/admin/students/create")
 @login_required("admin")
 def create_student():
+    started = time.monotonic()
     db = get_db()
     fields = {
         "student_number": request.form.get("student_number", "").strip(),
@@ -463,12 +474,23 @@ def create_student():
             ),
         )
         db.commit()
+        logging.getLogger("student_management").info(json.dumps({
+            "event": "student_create_database_commit_complete",
+            "correlation_id": g.correlation_id,
+            "elapsed_seconds": round(time.monotonic() - started, 3),
+        }))
     except (sqlite3.IntegrityError, psycopg2.IntegrityError):
         db.rollback()
         flash("Student ID already exists or the account could not be created.", "error")
         return redirect(url_for("admin_dashboard"))
 
+    notification_started = time.monotonic()
     publish_student_event("student_created", fields["student_number"], g.correlation_id)
+    logging.getLogger("student_management").info(json.dumps({
+        "event": "student_create_notification_enqueue_complete",
+        "correlation_id": g.correlation_id,
+        "elapsed_seconds": round(time.monotonic() - notification_started, 3),
+    }))
 
     # Show the generated temporary password once to the administrator.
     session["new_student_credentials"] = {

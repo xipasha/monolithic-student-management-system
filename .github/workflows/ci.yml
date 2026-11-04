@@ -47,6 +47,7 @@ jobs:
         with:
           inlineScript: |
             az bicep build --file infra/main.bicep --outfile /tmp/sms-main.json
+            az bicep build --file infra/courses-container-app.bicep --outfile /tmp/sms-courses-container-app.json
             az bicep build --file infra/what-if-role.bicep --outfile /tmp/sms-what-if-role.json
 
       - name: Set up Python

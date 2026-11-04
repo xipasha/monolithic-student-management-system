@@ -84,6 +84,11 @@ param coursesContainerImage string = 'ghcr.io/xipasha/monolithic-student-managem
 @description('Whether to manage the courses Container App resource.')
 param manageCoursesService bool = false
 
+@minValue(0)
+@maxValue(1)
+@description('Minimum courses replicas. Use 1 during the cutover period, then restore 0.')
+param coursesMinReplicas int = 0
+
 @description('Public URL of the courses service used by the monolith.')
 param coursesServiceUrl string = ''
 
@@ -159,75 +164,20 @@ resource coursesEnvironment 'Microsoft.App/managedEnvironments@2025-01-01' = if 
   }
 }
 
-resource coursesContainerApp 'Microsoft.App/containerApps@2025-01-01' = if (manageCoursesService) {
-  name: coursesContainerAppName
-  location: location
-  properties: {
-    managedEnvironmentId: coursesEnvironment.id
-    configuration: {
-      activeRevisionsMode: 'Single'
-      secrets: [
-        {
-          name: 'courses-service-token'
-          value: coursesServiceToken
-        }
-        {
-          name: 'courses-database-url'
-          value: coursesServiceDatabaseUrl
-        }
-      ]
-      ingress: {
-        external: true
-        allowInsecure: false
-        targetPort: 8000
-        transport: 'auto'
-      }
-    }
-    template: {
-      containers: [
-        {
-          name: 'courses-api'
-          image: coursesContainerImage
-          resources: {
-            cpu: json('0.25')
-            memory: '0.5Gi'
-          }
-          env: [
-            {
-              name: 'COURSES_SERVICE_TOKEN'
-              secretRef: 'courses-service-token'
-            }
-            {
-              name: 'DATABASE_URL'
-              secretRef: 'courses-database-url'
-            }
-            {
-              name: 'APP_MODULE'
-              value: 'services.courses.app:app'
-            }
-            {
-              name: 'PORT'
-              value: '8000'
-            }
-          ]
-        }
-      ]
-      scale: {
-        minReplicas: 0
-        maxReplicas: 3
-        rules: [
-          {
-            name: 'http-requests'
-            http: {
-              metadata: {
-                concurrentRequests: '10'
-              }
-            }
-          }
-        ]
-      }
-    }
+module coursesContainerApp './courses-container-app.bicep' = if (manageCoursesService) {
+  name: 'courses-container-app-${uniqueString(resourceGroup().id, coursesContainerAppName)}'
+  params: {
+    location: location
+    managedEnvironmentName: coursesEnvironmentName
+    containerAppName: coursesContainerAppName
+    containerImage: coursesContainerImage
+    coursesServiceToken: coursesServiceToken
+    coursesDatabaseUrl: coursesServiceDatabaseUrl
+    minReplicas: coursesMinReplicas
   }
+  dependsOn: [
+    coursesEnvironment
+  ]
 }
 
 resource webApp 'Microsoft.Web/sites@2023-12-01' = {

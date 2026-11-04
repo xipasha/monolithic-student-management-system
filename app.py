@@ -1,6 +1,9 @@
 import os
 import secrets
 import sqlite3
+import json
+import logging
+import uuid
 from functools import wraps
 from pathlib import Path
 from urllib.parse import unquote
@@ -12,12 +15,14 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 import psycopg2
 from psycopg2.extras import DictCursor
+from notifications import publish_student_event
 
 
 BASE_DIR = Path(__file__).resolve().parent
 DATABASE = BASE_DIR / "instance" / "sms.db"
 
 app = Flask(__name__)
+logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
 secret_key = os.environ.get("SECRET_KEY")
 if not secret_key:
     raise RuntimeError("SECRET_KEY environment variable must be set")
@@ -248,6 +253,27 @@ def initialise_database():
     init_db()
 
 
+@app.before_request
+def assign_correlation_id():
+    incoming = request.headers.get("X-Correlation-ID", "").strip()
+    allowed = all(char.isalnum() or char in "-_.:" for char in incoming)
+    g.correlation_id = incoming[:128] if incoming and allowed else str(uuid.uuid4())
+
+
+@app.after_request
+def log_request(response):
+    correlation_id = getattr(g, "correlation_id", str(uuid.uuid4()))
+    response.headers["X-Correlation-ID"] = correlation_id
+    logging.getLogger("student_management").info(json.dumps({
+        "event": "http_request",
+        "method": request.method,
+        "path": request.path,
+        "status_code": response.status_code,
+        "correlation_id": correlation_id,
+    }))
+    return response
+
+
 def login_required(role=None):
     def decorator(view):
         @wraps(view)
@@ -402,6 +428,8 @@ def create_student():
         flash("Student ID already exists or the account could not be created.", "error")
         return redirect(url_for("admin_dashboard"))
 
+    publish_student_event("student_created", fields["student_number"], g.correlation_id)
+
     # Show the generated temporary password once to the administrator.
     session["new_student_credentials"] = {
         "student_id": fields["student_number"],
@@ -424,7 +452,7 @@ def student_credentials():
 def toggle_student(student_id):
     db = get_db()
     student = db.execute(
-        """SELECT u.id, u.active FROM students s
+        """SELECT u.id, u.active, s.student_number FROM students s
            JOIN users u ON u.id = s.user_id WHERE s.id = ?""",
         (student_id,),
     ).fetchone()
@@ -436,6 +464,11 @@ def toggle_student(student_id):
         (0 if student["active"] else 1, student["id"]),
     )
     db.commit()
+    publish_student_event(
+        "student_activated" if not student["active"] else "student_deactivated",
+        student["student_number"],
+        g.correlation_id,
+    )
     flash("Student account status updated.", "success")
     return redirect(url_for("admin_dashboard"))
 
@@ -461,6 +494,8 @@ def reset_student_password(student_id):
         (generate_password_hash(temporary_password), student["id"]),
     )
     db.commit()
+
+    publish_student_event("password_reset", student["student_number"], g.correlation_id)
 
     session["new_student_credentials"] = {
         "student_id": student["student_number"],

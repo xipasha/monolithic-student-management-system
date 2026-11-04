@@ -346,7 +346,7 @@ role definition if this what-if check is no longer needed.
 SQLite database has no records, so there was no production data to copy.
 
 **Commits:** `4ef8f2d`, `e45928f`, `0ee7912`, `d663c25`, `9bd7835`,
-`a7b4dea`, `37c6a29`, `7bee412`
+`a7b4dea`, `37c6a29`, `7bee412`, `5cfad05`
 
 ### What changed
 
@@ -398,12 +398,15 @@ back during rollback.
   SQLite and PostgreSQL, coverage, container build and smoke test, GHCR image
   publication, live Bicep what-if, deployment, health check, and live login
   verification.
+- The subsequent migration-log push also passed the complete pipeline and live
+  login checks in run
+  [41798303187](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41798303187).
 - The live `/health` endpoint returned HTTP 200 with
   `{"application":"Student Management System","status":"ok"}`. The workflow
   verified the admin login and dashboard, created a temporary student, verified
   first login, password change, and the student dashboard, then deactivated
   that verification account.
-- The live App Service runs image
+- The first cutover run deployed image
   `ghcr.io/xipasha/monolithic-student-management-system:7bee412d98ad88954e670044ccfb8583750faabc`.
 - `git diff --check` passed. The original SQLite migration script was not run
   because the owner confirmed that the source database was empty.

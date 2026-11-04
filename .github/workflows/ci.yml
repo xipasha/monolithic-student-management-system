@@ -646,7 +646,7 @@ jobs:
             az containerapp create --name "$COURSES_CONTAINER_APP_NAME" \
               --resource-group "$AZURE_RESOURCE_GROUP" \
               --environment "$COURSES_ENVIRONMENT_NAME" --image "$IMAGE" \
-              --registry-server ghcr.io --ingress external --target-port 8000 \
+              --ingress external --target-port 8000 \
               --transport auto --cpu 0.25 --memory 0.5Gi \
               --min-replicas 0 --max-replicas 3 \
               --scale-rule-name http-requests --scale-rule-http-concurrency 10 \

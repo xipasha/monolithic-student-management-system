@@ -245,16 +245,23 @@ jobs:
           fi
           exit 1
 
+      - name: Install PostgreSQL client for verification cleanup
+        if: steps.health.outcome == 'success' && inputs.simulate_failure != true
+        run: python -m pip install --quiet psycopg2-binary
+
       - name: Verify live administrator and student logins
+        id: verify-logins
         if: steps.health.outcome == 'success' && inputs.simulate_failure != true
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           WEBAPP_URL: https://sms-student-management-20261103.azurewebsites.net
           TEST_RUN_ID: ${{ github.run_id }}
         run: |
           python - <<'PY'
           import html
           import os
+          import psycopg2
           import re
           import secrets
           from http.cookiejar import CookieJar
@@ -337,11 +344,28 @@ jobs:
                   if row:
                       post(admin, f"/admin/students/{row.group(1)}/toggle", {})
 
-          print("Administrator login/dashboard and student login/dashboard passed; the test student was deactivated.")
+              with psycopg2.connect(os.environ["DATABASE_URL"]) as database:
+                  with database.cursor() as cursor:
+                      cursor.execute(
+                          "DELETE FROM enrolments WHERE student_id IN "
+                          "(SELECT id FROM students WHERE student_number ~ '^STEP5[0-9]+$')"
+                      )
+                      cursor.execute(
+                          "DELETE FROM users WHERE id IN "
+                          "(SELECT user_id FROM students WHERE student_number ~ '^STEP5[0-9]+$')"
+                      )
+                      cursor.execute(
+                          "DELETE FROM students WHERE student_number ~ '^STEP5[0-9]+$'"
+                      )
+                      cursor.execute("SELECT COUNT(*) FROM students")
+                      if cursor.fetchone()[0] != 0:
+                          raise SystemExit("Verification cleanup found unexpected student rows.")
+
+          print("Administrator login/dashboard and student login/dashboard passed; temporary student rows were removed.")
           PY
 
       - name: Restore previous runtime and verify health
-        if: always() && steps.previous.outcome == 'success' && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success')
+        if: always() && steps.previous.outcome == 'success' && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success' || steps.verify-logins.outcome == 'failure')
         continue-on-error: true
         env:
           PREVIOUS_RUNTIME: ${{ steps.previous.outputs.runtime }}
@@ -373,5 +397,5 @@ jobs:
           exit 1
 
       - name: Fail deployment after unsuccessful update or rollback
-        if: always() && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success')
+        if: always() && (steps.health.outcome == 'failure' || steps.deploy.outcome != 'success' || steps.verify-logins.outcome == 'failure')
         run: exit 1

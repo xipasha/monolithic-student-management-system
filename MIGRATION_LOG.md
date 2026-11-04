@@ -505,8 +505,9 @@ confirming there are no messages to retain.
 
 **Date:** 2026-11-04
 
-**Status:** Implementation and environment provisioning started; Container App
-deployment and cutover verification are pending.
+**Status:** Courses Container App is deployed and healthy. Monolith cutover is
+pending; the deployment smoke run timed out while creating its temporary live
+student account and automatically restored the previous image.
 
 ### What changed
 
@@ -538,8 +539,8 @@ deployment and cutover verification are pending.
   per month. This excludes Log Analytics ingestion, which depends on log
   volume; it is not a fixed environment charge.
 - These are public USD retail estimates, not measured Azure for Students
-  credit consumption. The Container App has not yet been deployed, so actual
-  usage is not available.
+  credit consumption. The Container App now runs at zero replicas when idle;
+  actual usage is not available yet.
 
 ### Cutover, rollback, and known limitations
 
@@ -570,3 +571,23 @@ deployment and cutover verification are pending.
   and enrolment tables had no rows at the initial copy.
 - Docker is unavailable in the local environment; GitHub Actions will perform
   the monolith and courses entry-point image smoke builds.
+- The Container App deployed from public GHCR image
+  `ghcr.io/xipasha/monolithic-student-management-system:922fd1a9a9019ac1512c18da8cc762541ebc33c0`
+  with 0.25 vCPU, 0.5 GiB, min replicas 0, max replicas 3 and the HTTP request
+  scale rule. Its public `/health` endpoint returned `{"application":"Courses
+  Service","status":"ok"}`. GitHub Actions also completed its authenticated
+  database readiness check. The environment is Consumption, has no VNet and
+  has zone redundancy disabled. The only PostgreSQL firewall rule is the
+  existing `AllowAzureServices` rule (0.0.0.0–0.0.0.0).
+- The GitHub deployment principal needed `Log Analytics Contributor`,
+  `Container Apps Contributor`, and `Container Apps ManagedEnvironments
+  Contributor` at resource-group scope. The App Service drift check now skips
+  these resources because the separate Container Apps job manages them.
+- On 2026-11-04, CI tests and image smoke builds passed and the courses service
+  deployed. The subsequent App Service integration smoke test timed out during
+  the temporary student-creation request. The workflow restored the previous
+  monolith image (`064ced654ea04a676acc5a4386ddfac20582d96a`) and verified its
+  `/health` endpoint. `COURSES_SERVICE_ENABLED` remains `false`; no course
+  writes have been routed through the service. Investigate this timeout before
+  retrying the monolith deployment or beginning the approved write-freeze,
+  final copy, comparison and cutover.

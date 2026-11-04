@@ -1,6 +1,7 @@
 """HTTP API for courses and enrolments."""
 
 import hmac
+import json
 import logging
 import os
 import re
@@ -26,6 +27,13 @@ def set_correlation_id():
 @app.after_request
 def add_correlation_id(response):
     response.headers["X-Correlation-ID"] = g.correlation_id
+    logging.getLogger("courses_service").info(json.dumps({
+        "event": "http_request",
+        "method": request.method,
+        "path": request.path,
+        "status_code": response.status_code,
+        "correlation_id": g.correlation_id,
+    }))
     return response
 
 

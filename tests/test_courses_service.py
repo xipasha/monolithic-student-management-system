@@ -1,4 +1,5 @@
 import os
+import logging
 import subprocess
 import sys
 
@@ -25,6 +26,23 @@ def test_courses_api_requires_bearer_token(monkeypatch):
         "/api/courses", headers={"Authorization": "Bearer expected-token"}
     )
     assert response.status_code == 503
+
+
+def test_courses_service_logs_request_correlation_id(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="courses_service")
+    monkeypatch.setattr(courses_module, "TOKEN", "expected-token")
+    monkeypatch.setattr(storage, "fetch_courses", lambda _connection: [])
+    monkeypatch.setattr(courses_module, "database", lambda: object())
+    response = courses_module.app.test_client().get(
+        "/api/courses",
+        headers={
+            "Authorization": "Bearer expected-token",
+            "X-Correlation-ID": "course-log-correlation",
+        },
+    )
+    assert response.status_code == 200
+    assert response.headers["X-Correlation-ID"] == "course-log-correlation"
+    assert '"correlation_id": "course-log-correlation"' in caplog.text
 
 
 def test_courses_client_uses_three_second_timeout(monkeypatch):

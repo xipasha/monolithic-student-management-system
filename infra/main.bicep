@@ -69,6 +69,35 @@ param notifierContainerImage string = 'ghcr.io/xipasha/monolithic-student-manage
 @description('Whether the monolith should publish events. Keep false until the worker is healthy.')
 param notificationsEnabled bool = false
 
+@description('Container Apps environment for the extracted courses service.')
+param coursesEnvironmentName string = 'sms-courses-aca-env'
+
+@description('Log Analytics workspace used by the courses Container Apps environment.')
+param coursesWorkspaceName string = 'sms-courses-logs-20261104'
+
+@description('Name of the courses service Container App.')
+param coursesContainerAppName string = 'sms-courses-api'
+
+@description('Published public GHCR image for the courses service.')
+param coursesContainerImage string = 'ghcr.io/xipasha/monolithic-student-management-system:latest'
+
+@description('Whether to manage the courses Container App resource.')
+param manageCoursesService bool = false
+
+@description('Public URL of the courses service used by the monolith.')
+param coursesServiceUrl string = ''
+
+@secure()
+@description('Shared bearer token used by the monolith and courses service.')
+param coursesServiceToken string = ''
+
+@secure()
+@description('PostgreSQL connection URL for the isolated courses database role.')
+param coursesServiceDatabaseUrl string = ''
+
+@description('Whether the monolith should use the courses service. Keep false until data comparison and cutover.')
+param coursesServiceEnabled bool = false
+
 @description('Manage the Service Bus namespace, queue, and queue-scoped role assignments.')
 param manageServiceBus bool = true
 
@@ -96,6 +125,108 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = if (createAppSe
   }
   properties: {
     reserved: true
+  }
+}
+
+resource coursesWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+  name: coursesWorkspaceName
+  location: location
+  properties: {
+    retentionInDays: 30
+    sku: {
+      name: 'PerGB2018'
+    }
+  }
+}
+
+resource coursesEnvironment 'Microsoft.App/managedEnvironments@2025-01-01' = {
+  name: coursesEnvironmentName
+  location: location
+  properties: {
+    appLogsConfiguration: {
+      destination: 'log-analytics'
+      logAnalyticsConfiguration: {
+        customerId: coursesWorkspace.properties.customerId
+        sharedKey: coursesWorkspace.listKeys().primarySharedKey
+      }
+    }
+    workloadProfiles: [
+      {
+        name: 'Consumption'
+        workloadProfileType: 'Consumption'
+      }
+    ]
+  }
+}
+
+resource coursesContainerApp 'Microsoft.App/containerApps@2025-01-01' = if (manageCoursesService) {
+  name: coursesContainerAppName
+  location: location
+  properties: {
+    managedEnvironmentId: coursesEnvironment.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+      secrets: [
+        {
+          name: 'courses-service-token'
+          value: coursesServiceToken
+        }
+        {
+          name: 'courses-database-url'
+          value: coursesServiceDatabaseUrl
+        }
+      ]
+      ingress: {
+        external: true
+        allowInsecure: false
+        targetPort: 8000
+        transport: 'auto'
+      }
+    }
+    template: {
+      containers: [
+        {
+          name: 'courses-api'
+          image: coursesContainerImage
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: [
+            {
+              name: 'COURSES_SERVICE_TOKEN'
+              secretRef: 'courses-service-token'
+            }
+            {
+              name: 'DATABASE_URL'
+              secretRef: 'courses-database-url'
+            }
+            {
+              name: 'APP_MODULE'
+              value: 'services.courses.app:app'
+            }
+            {
+              name: 'PORT'
+              value: '8000'
+            }
+          ]
+        }
+      ]
+      scale: {
+        minReplicas: 0
+        maxReplicas: 3
+        rules: [
+          {
+            name: 'http-requests'
+            http: {
+              metadata: {
+                concurrentRequests: '10'
+              }
+            }
+          }
+        ]
+      }
+    }
   }
 }
 
@@ -263,6 +394,9 @@ resource appSettings 'Microsoft.Web/sites/config@2023-12-01' = {
     ADMIN_USERNAME: adminUsername
     ADMIN_PASSWORD: adminPassword
     NOTIFICATIONS_ENABLED: string(notificationsEnabled)
+    COURSES_SERVICE_ENABLED: string(coursesServiceEnabled)
+    COURSES_SERVICE_URL: coursesServiceUrl
+    COURSES_SERVICE_TOKEN: coursesServiceToken
     SERVICEBUS_NAMESPACE: '${serviceBusNamespaceName}.servicebus.windows.net'
     SERVICEBUS_QUEUE: serviceBusQueueName
   }

@@ -66,6 +66,9 @@ expected = {
     "NOTIFICATIONS_ENABLED": os.environ["NOTIFICATIONS_ENABLED"],
     "SERVICEBUS_NAMESPACE": os.environ.get("AZURE_SERVICEBUS_NAMESPACE_FQDN", "sms-student-events-20261104.servicebus.windows.net"),
     "SERVICEBUS_QUEUE": "student-notifications",
+    "COURSES_SERVICE_ENABLED": os.environ.get("COURSES_SERVICE_ENABLED", "false"),
+    "COURSES_SERVICE_URL": os.environ.get("COURSES_SERVICE_URL", ""),
+    "COURSES_SERVICE_TOKEN": os.environ.get("COURSES_SERVICE_TOKEN", ""),
 }
 if os.environ.get("DATABASE_URL"):
     expected["DATABASE_URL"] = os.environ["DATABASE_URL"]
@@ -74,6 +77,8 @@ if os.environ.get("ADMIN_PASSWORD"):
 actual = {item["name"]: item["value"] for item in json.loads(os.environ["APP_SETTINGS_JSON"])}
 missing = expected.keys() - actual.keys()
 extra = actual.keys() - expected.keys()
+not_yet_bootstrapped = {"COURSES_SERVICE_ENABLED", "COURSES_SERVICE_URL", "COURSES_SERVICE_TOKEN"} - actual.keys()
+missing -= not_yet_bootstrapped
 mismatched = {name for name in expected.keys() & actual.keys() if actual[name] != expected[name]}
 mismatched.discard("NOTIFICATIONS_ENABLED")
 if "NOTIFICATIONS_ENABLED" in expected and actual.get("NOTIFICATIONS_ENABLED", "").lower() != expected["NOTIFICATIONS_ENABLED"].lower():
@@ -115,9 +120,15 @@ az deployment group what-if \
     deploymentIdentityPrincipalId="$identity_principal_id" \
     containerImage="$container_image" \
     notifierContainerImage="ghcr.io/xipasha/monolithic-student-management-system-notifier:${GITHUB_SHA:-latest}" \
+    coursesContainerImage="ghcr.io/xipasha/monolithic-student-management-system:${GITHUB_SHA:-latest}" \
     serviceBusNamespaceName="$service_bus_namespace" \
     notifierAppName="$notifier_name" \
     notificationsEnabled="$notifications_enabled" \
+    manageCoursesService=true \
+    coursesServiceEnabled="${COURSES_SERVICE_ENABLED:-false}" \
+    coursesServiceUrl="${COURSES_SERVICE_URL:-}" \
+    coursesServiceToken="${COURSES_SERVICE_TOKEN:-}" \
+    coursesServiceDatabaseUrl="${COURSES_DATABASE_URL:-}" \
   --result-format FullResourcePayloads \
   --no-pretty-print \
   --output json > "$what_if_file"
@@ -137,6 +148,8 @@ unexpected = []
 webapp_name = os.environ["WEBAPP_NAME"].lower()
 notifier_name = os.environ["NOTIFIER_NAME"].lower()
 service_bus_namespace = os.environ["SERVICEBUS_NAMESPACE"].lower()
+courses_app_name = "sms-courses-api"
+courses_environment_name = "sms-courses-aca-env"
 for change in changes:
     kind = change["changeType"]
     resource_id = change["resourceId"]
@@ -150,11 +163,14 @@ for change in changes:
     if kind == "Create" and (
         f"/sites/{notifier_name}" in normalized_id
         or f"/namespaces/{service_bus_namespace}" in normalized_id
+        or f"/containerapps/{courses_app_name}" in normalized_id
     ):
         continue
     if kind == "Modify" and normalized_id.endswith(f"/sites/{notifier_name}"):
         continue
     if kind == "Modify" and normalized_id.endswith(f"/sites/{notifier_name}/config/appsettings"):
+        continue
+    if kind == "Modify" and normalized_id.endswith(f"/containerapps/{courses_app_name}"):
         continue
     unexpected.append(f"{kind} {resource_id}")
 

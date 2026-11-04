@@ -130,12 +130,43 @@ jobs:
           docker rm --force student-management-notifier-smoke
           exit 1
 
+  courses-container-build-smoke:
+    runs-on: ubuntu-latest
+    needs: tests
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Build the existing public image with the courses entry point
+        run: docker build --pull -t student-management-courses:${{ github.sha }} .
+
+      - name: Start courses image and verify liveness
+        run: |
+          docker run --detach --name student-management-courses-smoke \
+            --publish 8002:8000 \
+            --env COURSES_SERVICE_TOKEN=ci-test-token \
+            --env APP_MODULE=services.courses.app:app \
+            student-management-courses:${{ github.sha }}
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8002/health; then
+              docker rm --force student-management-courses-smoke
+              exit 0
+            fi
+            sleep 2
+          done
+
+          docker logs student-management-courses-smoke
+          docker rm --force student-management-courses-smoke
+          exit 1
+
   publish-image:
     if: |
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    needs: [tests, container-build-smoke, notifier-container-build-smoke]
+    needs: [tests, container-build-smoke, notifier-container-build-smoke, courses-container-build-smoke]
     permissions:
       contents: read
       packages: write
@@ -165,6 +196,7 @@ jobs:
           file: services/notifier/Dockerfile
           push: true
           tags: ghcr.io/${{ github.repository }}-notifier:${{ github.sha }}
+
 
   deploy-app-service:
     if: |
@@ -210,6 +242,10 @@ jobs:
           POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          COURSES_SERVICE_TOKEN: ${{ secrets.COURSES_SERVICE_TOKEN }}
+          COURSES_DATABASE_URL: ${{ secrets.COURSES_DATABASE_URL }}
+          COURSES_SERVICE_URL: ${{ vars.COURSES_SERVICE_URL }}
+          COURSES_SERVICE_ENABLED: ${{ vars.COURSES_SERVICE_ENABLED || 'false' }}
         run: bash scripts/infra-whatif.sh
 
       - name: Record currently configured App Service runtime
@@ -254,6 +290,23 @@ jobs:
           else
             bash scripts/deploy-container.sh "${{ github.sha }}"
           fi
+
+      - name: Configure courses service endpoint without enabling cutover
+        if: steps.deploy.outcome == 'success' && inputs.simulate_failure != true
+        env:
+          COURSES_SERVICE_TOKEN: ${{ secrets.COURSES_SERVICE_TOKEN }}
+          COURSES_SERVICE_URL: ${{ vars.COURSES_SERVICE_URL }}
+          COURSES_SERVICE_ENABLED: ${{ vars.COURSES_SERVICE_ENABLED || 'false' }}
+        run: |
+          if [[ -z "$COURSES_SERVICE_TOKEN" || -z "$COURSES_SERVICE_URL" ]]; then
+            echo "Courses service shared token or URL is not configured." >&2
+            exit 1
+          fi
+          az webapp config appsettings set \
+            --name "$AZURE_WEBAPP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" \
+            --settings COURSES_SERVICE_ENABLED="$COURSES_SERVICE_ENABLED" \
+              COURSES_SERVICE_URL="$COURSES_SERVICE_URL" \
+              COURSES_SERVICE_TOKEN="$COURSES_SERVICE_TOKEN" --output none
 
       - name: Wait for application health
         id: health
@@ -533,3 +586,97 @@ jobs:
             --settings NOTIFICATIONS_ENABLED=false --output none
           echo "Monolith health check failed after enabling; notifications were disabled again." >&2
           exit 1
+
+  deploy-courses-service:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      vars.COURSES_SERVICE_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    needs: [publish-image]
+    concurrency:
+      group: sms-courses-service-deployment
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_CLIENT_ID: dfd6e7ba-fca0-482a-a91c-fa4b3143446d
+      AZURE_TENANT_ID: 816691e0-63cf-49e9-be3f-b237b7e2f6ca
+      AZURE_SUBSCRIPTION_ID: 74577974-a069-4c7e-90ea-9f06a0aaa0f5
+      AZURE_RESOURCE_GROUP: work
+      COURSES_ENVIRONMENT_NAME: sms-courses-aca-env
+      COURSES_CONTAINER_APP_NAME: sms-courses-api
+
+    steps:
+      - name: Confirm image is anonymously pullable from GHCR
+        run: docker pull "ghcr.io/xipasha/monolithic-student-management-system:${{ github.sha }}"
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Update courses service secrets and image
+        env:
+          COURSES_SERVICE_TOKEN: ${{ secrets.COURSES_SERVICE_TOKEN }}
+          COURSES_DATABASE_URL: ${{ secrets.COURSES_DATABASE_URL }}
+          IMAGE: ghcr.io/xipasha/monolithic-student-management-system:${{ github.sha }}
+        run: |
+          if [[ -z "$COURSES_SERVICE_TOKEN" || -z "$COURSES_DATABASE_URL" ]]; then
+            echo "Courses service secrets are not configured." >&2
+            exit 1
+          fi
+          if az containerapp show --name "$COURSES_CONTAINER_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" --output none 2>/dev/null; then
+            az containerapp secret set --name "$COURSES_CONTAINER_APP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --secrets "courses-service-token=$COURSES_SERVICE_TOKEN" \
+                "courses-database-url=$COURSES_DATABASE_URL" --output none
+            az containerapp update --name "$COURSES_CONTAINER_APP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" --image "$IMAGE" \
+              --min-replicas 0 --max-replicas 3 \
+              --set-env-vars PORT=8000 \
+                APP_MODULE=services.courses.app:app \
+                COURSES_SERVICE_TOKEN=secretref:courses-service-token \
+                DATABASE_URL=secretref:courses-database-url --output none
+          else
+            az containerapp create --name "$COURSES_CONTAINER_APP_NAME" \
+              --resource-group "$AZURE_RESOURCE_GROUP" \
+              --environment "$COURSES_ENVIRONMENT_NAME" --image "$IMAGE" \
+              --registry-server ghcr.io --ingress external --target-port 8000 \
+              --transport auto --cpu 0.25 --memory 0.5Gi \
+              --min-replicas 0 --max-replicas 3 \
+              --scale-rule-name http-requests --scale-rule-http-concurrency 10 \
+              --secrets "courses-service-token=$COURSES_SERVICE_TOKEN" \
+                "courses-database-url=$COURSES_DATABASE_URL" \
+              --env-vars PORT=8000 \
+                APP_MODULE=services.courses.app:app \
+                COURSES_SERVICE_TOKEN=secretref:courses-service-token \
+                DATABASE_URL=secretref:courses-database-url
+          fi
+
+          app_url="https://$(az containerapp show --name "$COURSES_CONTAINER_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --query properties.configuration.ingress.fqdn --output tsv)"
+          echo "Courses service deployed at $app_url"
+
+          healthy=false
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 4 "$app_url/health"; then
+              healthy=true
+              break
+            fi
+            sleep 2
+          done
+          if [[ "$healthy" != "true" ]]; then
+            echo "Courses service health check did not pass." >&2
+            exit 1
+          fi
+          if ! curl --fail --silent --show-error --max-time 5 \
+            --header "Authorization: Bearer $COURSES_SERVICE_TOKEN" "$app_url/ready"; then
+            echo "Courses service database readiness check failed; verify PostgreSQL firewall and role settings." >&2
+            exit 1
+          fi

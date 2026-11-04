@@ -128,7 +128,7 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = if (createAppSe
   }
 }
 
-resource coursesWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+resource coursesWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = if (manageCoursesService) {
   name: coursesWorkspaceName
   location: location
   properties: {
@@ -139,7 +139,7 @@ resource coursesWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' 
   }
 }
 
-resource coursesEnvironment 'Microsoft.App/managedEnvironments@2025-01-01' = {
+resource coursesEnvironment 'Microsoft.App/managedEnvironments@2025-01-01' = if (manageCoursesService) {
   name: coursesEnvironmentName
   location: location
   properties: {

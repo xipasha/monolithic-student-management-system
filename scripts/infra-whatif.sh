@@ -124,7 +124,7 @@ az deployment group what-if \
     serviceBusNamespaceName="$service_bus_namespace" \
     notifierAppName="$notifier_name" \
     notificationsEnabled="$notifications_enabled" \
-    manageCoursesService=true \
+    manageCoursesService=false \
     coursesServiceEnabled="${COURSES_SERVICE_ENABLED:-false}" \
     coursesServiceUrl="${COURSES_SERVICE_URL:-}" \
     coursesServiceToken="${COURSES_SERVICE_TOKEN:-}" \

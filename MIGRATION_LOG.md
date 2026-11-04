@@ -346,7 +346,8 @@ role definition if this what-if check is no longer needed.
 SQLite database has no records, so there was no production data to copy.
 
 **Commits:** `4ef8f2d`, `e45928f`, `0ee7912`, `d663c25`, `9bd7835`,
-`a7b4dea`, `37c6a29`, `7bee412`, `5cfad05`
+`a7b4dea`, `37c6a29`, `7bee412`, `5cfad05`, `a565642`, `ac7fdbf`,
+`8395cab`
 
 ### What changed
 
@@ -401,11 +402,19 @@ back during rollback.
 - The subsequent migration-log push also passed the complete pipeline and live
   login checks in run
   [41798303187](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41798303187).
+- Run [41800271781](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41800271781)
+  exercised automatic rollback after the verification cleanup hit a foreign-key
+  ordering error. The new image was restored to the prior runtime and health
+  returned; the login checks themselves had passed.
+- After correcting the cleanup order, run
+  [41800984793](https://github.com/xipasha/monolithic-student-management-system/actions/runs/41800984793)
+  passed all test, deployment, health, and login gates. Its cleanup removed the
+  verification student rows and confirmed the database has no student rows.
 - The live `/health` endpoint returned HTTP 200 with
   `{"application":"Student Management System","status":"ok"}`. The workflow
   verified the admin login and dashboard, created a temporary student, verified
-  first login, password change, and the student dashboard, then deactivated
-  that verification account.
+  first login, password change, and the student dashboard. The final verified
+  workflow removed the temporary verification rows afterward.
 - The first cutover run deployed image
   `ghcr.io/xipasha/monolithic-student-management-system:7bee412d98ad88954e670044ccfb8583750faabc`.
 - `git diff --check` passed. The original SQLite migration script was not run
